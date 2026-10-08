@@ -7,9 +7,10 @@ Do not publish credentials, serial numbers, UUIDs, private network addresses,
 full system dumps or signing identities in issues. Reproduce problems with
 synthetic data whenever possible.
 
-The project is pre-release. A private vulnerability-reporting channel must be
-enabled and documented before the first public release. Until then, do not
-post sensitive vulnerability details to a public issue tracker.
+The project is pre-release. Use
+[GitHub private vulnerability reporting](https://github.com/pettipol/ups-monitor-macos/security/advisories/new)
+for security findings; the repository channel was verified enabled on 2026-10-08.
+Do not post sensitive vulnerability details to a public issue tracker.
 
 The application must not silently install services, take exclusive USB access,
 change power-management settings, disable certificate checks or bypass macOS

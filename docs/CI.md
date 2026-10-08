@@ -1,8 +1,9 @@
 # Continuous Integration
 
-Configuration reviewed on 2026-10-08. **Hosted execution NOT RUN**: this
-checkout has not been published or attached to a GitHub remote. A workflow file
-and local validation are not a successful GitHub run.
+Configuration reviewed on 2026-10-08. **First hosted execution PASS** on source
+commit `270ac3e8edb2ffd0548ff0927363a81dffdf5f81`:
+[GitHub run 37788712924](https://github.com/pettipol/ups-monitor-macos/actions/runs/37788712924).
+This is synthetic source/build evidence, not product or hardware qualification.
 
 The workflow runs the same [validation entry point](VALIDATION.md) on pushes
 to `main`, pull requests and manual dispatch. It has only `contents: read`,
@@ -12,9 +13,12 @@ neither `pull_request_target` nor `workflow_run` to execute untrusted PR code.
 No artifacts, credentials or release binaries are uploaded by this workflow.
 
 Pull requests can execute their changed tests on the disposable GitHub-hosted
-runner. Maintainer approval and repository Actions settings must still be
-reviewed when the public repository is created; this YAML does not configure
-those account-side settings. GitHub's temporary read-only token is used by
+runner. On 2026-10-08 the repository API confirmed approval required for all
+external contributors, default workflow permissions read-only and no workflow
+permission to approve pull requests. This YAML does not configure those
+account-side settings. Repository-wide action permissions still allow all
+actions and do not mandate SHA pins for future workflows; the pins below are
+enforced in this workflow only. GitHub's temporary read-only token is used by
 the checkout/tool-setup actions, not a personal credential.
 
 ## Pinned Inputs
@@ -53,7 +57,22 @@ Full NUT qualification must retain its separate evidence; a green base job
 cannot stand in for that check or for real UPS telemetry.
 
 Before publication acceptance, run this workflow from the intended public
-repository and record its revision, image, counts and skipped tests. Add a
+repository and record its revision, image, counts and skipped tests. The first
+source-preview run is recorded below. Add a
 separately reviewed reproducible NUT-client job before treating hosted CI as
 full transport qualification. Signing, UI, widget registration, hardware,
 privacy and distribution gates remain independent.
+
+## First Hosted Result
+
+The run above completed on 2026-10-08 with **229 Swift tests passed, 2 optional
+interop tests skipped, and 11 Python tests passed**. The 14-case preflight harness,
+SwiftPM Release build, plist checks, Xcode app/widget Release build and deep/strict
+ad-hoc signature verification all passed. No app, probe or driver was launched.
+
+Actual runner: `xcode-27-arm64`, image `20261006.0244.1`, macOS 27.0.1 build
+26A434, runner 2.337.0. This is newer than the image inventory observed during
+preparation above. The executed preflight confirmed Xcode 27.0 build 27A266a,
+Apple Swift 6.4 and Python 3.14.8. Job token permissions were Contents/Metadata
+read. No release binary was uploaded. A separate local clone of this public
+commit passed the same default validation sequence.

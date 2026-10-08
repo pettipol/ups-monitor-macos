@@ -46,8 +46,10 @@ APC measurement path. See [energy tracker](docs/ENERGY_TRACKER.md) and
 The source preview includes a [compatibility matrix](docs/COMPATIBILITY.md),
 [Italian guide](docs/GUIDA_ITALIANA.md), [privacy/data policy](PRIVACY.md),
 [third-party notices](THIRD_PARTY_NOTICES.md) and [contribution guide](CONTRIBUTING.md).
-The [pinned CI workflow](docs/CI.md) is configured but has not run on GitHub;
-there is no public release or verified distribution artifact yet.
+The [pinned CI workflow](docs/CI.md) passed its first GitHub-hosted run with
+229 Swift tests passed, 2 optional NUT interop tests skipped, and 11 Python tests
+passed, plus Release builds and ad-hoc signature checks. There is no public
+release or verified distribution artifact yet.
 
 ## Build and Inspect
 
