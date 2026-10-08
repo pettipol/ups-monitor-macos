@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [0.1.0-preview.1] - Source preview
+
+Date: 2026-10-08
+
+- Documented a source-only archive workflow with an explicit commit, checksums
+  and clean extracted-source validation, separate from binary distribution.
 - Added minimal macOS app/widget privacy declarations and checks of source and
   built-bundle placement. The platform-specific review distinguishes local
   storage from developer data collection and does not invent required-reason
@@ -35,10 +41,6 @@
   matching signed group entitlements. Runtime shared access and installed
   widget behavior remain open; no personal signing identifiers are included.
 
-## [0.1.0-preview.1] - Source preview
-
-Date: 2026-10-08
-
 - Established the macOS menu-bar app, details window, opt-in SQLite history,
   stored-session browser, local alert policy and small/medium widget source.
   Synthetic tests cover these boundaries; signed App Group access and installed
@@ -57,7 +59,7 @@ Date: 2026-10-08
   so energy intervals use acquisition receipt timing rather than UI refreshes.
 - Added the canonical `0.1.0-preview.1` SemVer, checked bundle metadata and
   synthetic version-drift tests. Apple bundle version fields remain numeric;
-  this source version is not a release or hardware qualification.
+  this source version is not an installable app or hardware qualification.
 - Updated public compatibility, build, contribution and third-party licensing
   guidance. Live watt qualification remains open.
 - Added pinned hosted CI and local synthetic validation. The first hosted run

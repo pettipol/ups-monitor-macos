@@ -24,3 +24,14 @@ Hosted automation uses `actions/checkout` v7.0.1 and `actions/setup-python`
 v7.0.0 pinned to reviewed release commits; exact SHAs, source links and the
 preview hosted-image limitation are recorded in [CI.md](CI.md). These are
 CI-only inputs, not application runtime dependencies or included app code.
+
+## Source Prerelease Refresh
+
+The 2026-10-08 pre-publication check found the same stable releases: Apple's
+release index lists Xcode 27 (27A266a), with 27.1 RC and 27.2 beta separate;
+[Swift's installer page](https://www.swift.org/install/macos/) lists 6.4.0;
+Python's macOS download is 3.14.8. Official GitHub latest-release responses
+still identify NUT 2.8.5, libusb 1.0.30, checkout 7.0.1 and setup-python 7.0.0.
+NUT master still resolves to the experimental SHA above. No baseline or
+dependency was changed for the source archive; experimental NUT remains an
+explicit exception, not a stable dependency or bundled binary.

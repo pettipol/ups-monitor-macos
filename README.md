@@ -46,6 +46,12 @@ The [offscreen render probe](docs/RENDER_PROBE.md) is separate from these app ca
 
 ## Quickstart
 
+For a versioned source download, use the [prereleases](https://github.com/pettipol/ups-monitor-macos/releases)
+and follow the [archive verification steps](docs/SOURCE_RELEASE.md). The
+maintainer-attached `-source.tar.gz` asset has its own SHA-256 file. It contains
+source, not an installable app or a NUT driver. GitHub's automatically generated
+source ZIP/tar links are separate artifacts and do not share that checksum.
+
 Requirements for the pinned validation workflow: macOS, Xcode 27.0 build `27A266a`, Apple Swift 6.4 and Python 3.14.8. The Swift package declares macOS 14+, but that deployment setting is not evidence of runtime support on macOS 14. For the current baseline and exact validation sequence, see [local validation](docs/VALIDATION.md).
 
 ```sh
