@@ -1,0 +1,683 @@
+# Experimental GPL-covered source patch. Not application MIT code.
+# Network UPS Tools base commit: 1a8369f8688443a500527059167d2f66ca27535f
+# Provenance: Network UPS Tools, GPL-2.0-or-later per source headers.
+# Offline prototype; no UPS, USB interface, or driver was exercised.
+
+diff --git a/drivers/Makefile.am b/drivers/Makefile.am
+index 4a3cc00b0..8f63e5928 100644
+--- a/drivers/Makefile.am
++++ b/drivers/Makefile.am
+@@ -235,7 +235,7 @@ upsdrvctl_LDADD = libdummy_upsdrvquery.la $(LDADD_COMMON)
+ 
+ # serial drivers: all of them use standard LDADD and CFLAGS
+ al175_SOURCES = al175.c
+-apcmicrolink_SOURCES = apcmicrolink.c apcmicrolink-maps.c apc_common.c
++apcmicrolink_SOURCES = apcmicrolink.c apcmicrolink-maps.c apc_common.c nut-guarded-policy.h
+ apcmicrolink_LDADD = $(LDADD_DRIVERS_SERIAL)
+ if WITH_USB
+ apcmicrolink_SOURCES += apcmicrolink-usb.c hidparser.c
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+index f3c53b759..a6f0842fe 100644
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -49,6 +49,7 @@
+ 
+ #include "apcmicrolink.h"
+ #include "apcmicrolink-usb.h"
++#include "nut-guarded-policy.h"
+ 
+ /* American Power Conversion */
+ #define APC_VENDORID	0x051d
+@@ -111,6 +112,7 @@ static usb_communication_subdriver_t *comm_driver = &usb_subdriver;
+  * microlink_usb_open() succeeds again. apcmicrolink.c polls this to decide
+  * when a USB reset-and-reopen is actually warranted. */
+ static int usb_device_gone = 0;
++static int guarded_monitor = 0;
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ /* Always-outstanding async interrupt-IN listener, serviced by a dedicated pump
+@@ -433,6 +435,7 @@ int microlink_usb_open(void)
+ {
+ 	char *regex_array[USBMATCHER_REGEXP_ARRAY_LIMIT];
+ 	int ret;
++	guarded_monitor = testvar("guarded_monitor");
+ 
+ #if WITH_LIBUSB_0_1
+ 	{
+@@ -538,6 +541,11 @@ void microlink_usb_close(void)
+ 	in_report_pos = 0;
+ }
+ 
++static void microlink_usb_reset_handle(void *handle)
++{
++	usb_reset((usb_dev_handle *)handle);
++}
++
+ int microlink_usb_reset_and_reopen(void)
+ {
+ 	int ret;
+@@ -549,11 +557,8 @@ int microlink_usb_reset_and_reopen(void)
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
+ 	if (udev) {
+-		/* Send USB bus reset. The handle is invalid afterward regardless of
+-		 * the return value - close it unconditionally. usb_reset() is NUT's
+-		 * usb-common.h abstraction; calling libusb_reset_device() directly
+-		 * breaks NUT_USB_VARIANT=0.1 builds. */
+-		usb_reset(udev);
++		/* The guarded profile closes and reopens without a bus reset. */
++		nut_guard_maybe_reset(guarded_monitor, microlink_usb_reset_handle, udev);
+ 		comm_driver->close_dev(udev);
+ 		udev = NULL;
+ 	}
+@@ -571,8 +576,10 @@ int microlink_usb_reset_and_reopen(void)
+ 	in_report_len = 0;
+ 	in_report_pos = 0;
+ 
+-	/* Give the device time to complete re-enumeration before opening. */
+-	sleep(2);
++	/* Give a reset device time to complete re-enumeration before opening. */
++	if (!guarded_monitor) {
++		sleep(2);
++	}
+ 
+ 	/* Re-open using the still-valid regex_matcher (never freed here). */
+ 	ret = comm_driver->open_dev(&udev, &curDevice, regex_matcher,
+@@ -583,7 +590,8 @@ int microlink_usb_reset_and_reopen(void)
+ 	}
+ 	usb_device_gone = 0;
+ 
+-	upsdebugx(1, "microlink_usb: reset and reopened %s/%s (USB %04x:%04x)",
++	upsdebugx(1, "microlink_usb: %s and reopened %s/%s (USB %04x:%04x)",
++		guarded_monitor ? "closed" : "reset",
+ 		curDevice.Vendor ? curDevice.Vendor : "unknown",
+ 		curDevice.Product ? curDevice.Product : "unknown",
+ 		curDevice.VendorID, curDevice.ProductID);
+diff --git a/drivers/apcmicrolink.c b/drivers/apcmicrolink.c
+index 1ef6e8f0b..cfe7c9965 100644
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -26,6 +26,7 @@
+ #include "apc_common.h"
+ #include "apcmicrolink.h"
+ #include "apcmicrolink-maps.h"
++#include "nut-guarded-policy.h"
+ #ifdef WITH_USB
+ #include "apcmicrolink-usb.h"
+ #endif /* WITH_USB */
+@@ -254,8 +255,12 @@ static const struct {
+ static microlink_object_t objects[256];
+ static speed_t microlink_baudrate = MLINK_DEFAULT_BAUDRATE;
+ static int session_ready = 0;
++static int guarded_monitor = 0;
+ #ifdef WITH_USB
+ static int is_usb = 0;
++static long guarded_deadline_seconds = 0;
++static st_tree_timespec_t guarded_deadline_start;
++static int guarded_deadline_active = 0;
+ #endif /* WITH_USB */
+ static unsigned char rxbuf[MLINK_MAX_FRAME * 2];
+ static size_t rxbuf_len = 0;
+@@ -634,6 +639,38 @@ static int microlink_timeout_expired(const st_tree_timespec_t *start,
+ 	return difftime_st_tree_timespec(now, *start) >= timeout;
+ }
+ 
++#ifdef WITH_USB
++static int microlink_guard_elapsed(void *unused, double *elapsed)
++{
++	st_tree_timespec_t now;
++	(void)unused;
++	if (state_get_timestamp(&now) != 0)
++		return -1;
++	*elapsed = difftime_st_tree_timespec(now, guarded_deadline_start);
++	return 0;
++}
++
++static void microlink_guard_deadline_begin(void)
++{
++	if (guarded_monitor) {
++		if (state_get_timestamp(&guarded_deadline_start) != 0)
++			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor cannot read monotonic clock");
++		guarded_deadline_active = 1;
++	}
++}
++
++static int microlink_guard_deadline_expired(void)
++{
++	if (!guarded_monitor) {
++		return 0;
++	}
++	if (!guarded_deadline_active)
++		return 1;
++	return nut_guard_deadline_expired((double)guarded_deadline_seconds,
++		microlink_guard_elapsed, NULL);
++}
++#endif /* WITH_USB */
++
+ static unsigned int microlink_handshake_retries(void)
+ {
+ #ifdef WITH_USB
+@@ -694,6 +731,10 @@ static int microlink_midsession_timed_out(time_t now)
+ 
+ static int microlink_prime_poll(void)
+ {
++#ifdef WITH_USB
++	if (is_usb && microlink_guard_deadline_expired())
++		return 0;
++#endif /* WITH_USB */
+ 	if (!microlink_send_simple(MLINK_NEXT_BYTE)) {
+ 		ser_comm_fail("microlink: failed to send poll byte");
+ 		poll_primed = 0;
+@@ -3051,6 +3092,12 @@ static int microlink_receive_once(void)
+ 		unsigned char ch;
+ 		ssize_t ret;
+ 
++#ifdef WITH_USB
++		if (is_usb && microlink_guard_deadline_expired()) {
++			return 0;
++		}
++#endif /* WITH_USB */
++
+ 		if (microlink_try_extract_frame(frame, &framelen)) {
+ 			return microlink_process_frame(frame, framelen);
+ 		}
+@@ -3087,6 +3134,10 @@ static int microlink_receive_once(void)
+ 
+ static int microlink_poll_once(time_t now)
+ {
++#ifdef WITH_USB
++	if (is_usb && microlink_guard_deadline_expired())
++		return 0;
++#endif /* WITH_USB */
+ 	if (!poll_primed) {
+ 		if (!microlink_prime_poll()) {
+ 			return 0;
+@@ -3150,6 +3201,10 @@ static int microlink_poll_burst(void)
+ 	time_t started = microlink_now();
+ 	time_t now = started;
+ 
++#ifdef WITH_USB
++	microlink_guard_deadline_begin();
++#endif /* WITH_USB */
++
+ 	while (fetched < budget || microlink_auth_pending(now)) {
+ 		/* A pending shutdown outranks finishing the pass. The main loop
+ 		 * cannot begin tearing down until upsdrv_updateinfo() returns, so
+@@ -3162,6 +3217,12 @@ static int microlink_poll_burst(void)
+ 				"records - shutting down", fetched, budget);
+ 			break;
+ 		}
++		#ifdef WITH_USB
++		if (is_usb && microlink_guard_deadline_expired()) {
++			upsdebugx(1, "microlink: guarded poll receive deadline expired after %u records", fetched);
++			break;
++		}
++		#endif /* WITH_USB */
+ 
+ 		if (!microlink_poll_once(now)) {
+ 			break;
+@@ -3218,6 +3279,10 @@ static int microlink_start_session_impl(unsigned int max_attempts)
+ 	}
+ 
+ 	for (attempt = 0; attempt < max_attempts; attempt++) {
++#ifdef WITH_USB
++		if (is_usb && microlink_guard_deadline_expired())
++			return 0;
++#endif /* WITH_USB */
+ 		/* PowerChute's own comms-lost recovery (MicroLinkTranslator.
+ 		 * sendStop()/sendNak()) always sends STOP immediately before NAK,
+ 		 * never NAK alone - see MLINK_STOP_BYTE's comment. A STOP write
+@@ -3228,6 +3293,10 @@ static int microlink_start_session_impl(unsigned int max_attempts)
+ 			return 0;
+ 		}
+ 
++#ifdef WITH_USB
++		if (is_usb && microlink_guard_deadline_expired())
++			return 0;
++#endif /* WITH_USB */
+ 		if (!microlink_send_simple(MLINK_INIT_BYTE)) {
+ 			return 0;
+ 		}
+@@ -3257,6 +3326,9 @@ static int microlink_reconnect_session(void)
+ 		consecutive_timeouts, descriptor_usage_count, descriptor_ready,
+ 		authentication_sent);
+ 	session_ready = 0;
++#ifdef WITH_USB
++	microlink_guard_deadline_begin();
++#endif /* WITH_USB */
+ 	return microlink_start_session();
+ }
+ 
+@@ -3676,6 +3748,8 @@ static int setvar(const char *varname, const char *val)
+ 	char path[64];
+ 
+ 	upsdebug_SET_STARTING(varname, val);
++	if (!nut_guard_allows_control(guarded_monitor))
++		return STAT_SET_FAILED;
+ 
+ 	entry = microlink_find_desc_value_by_var(varname, &index);
+ 	if (entry != NULL && (entry->access & MLINK_DESC_RW)) {
+@@ -3699,6 +3773,8 @@ static int instcmd(const char *cmdname, const char *extra)
+ 	int ret = STAT_INSTCMD_INVALID;
+ 
+ 	upsdebug_INSTCMD_STARTING(cmdname, extra);
++	if (!nut_guard_allows_control(guarded_monitor))
++		return STAT_INSTCMD_INVALID;
+ 
+ 	if (microlink_handle_outlet_cmd(cmdname, extra, &ret)) {
+ 		upslog_INSTCMD_RESULT(ret, cmdname, extra);
+@@ -3745,6 +3821,27 @@ void upsdrv_initups(void)
+ 	}
+ 
+ 	is_usb = use_usb;
++	guarded_monitor = testvar("guarded_monitor");
++	if (guarded_monitor) {
++		const char *deadline_text = getval("guard_deadline");
++		char *end = NULL;
++		long deadline;
++		uint16_t guard_id;
++#if !WITH_LIBUSB_1_0 || WITH_LIBUSB_0_1
++		fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor requires libusb-1.0 only");
++#endif
++		if (!use_usb || strcasecmp(device_path, "auto")
++		 || !nut_guard_hex_id(getval("guard_vid"), &guard_id)
++		 || !nut_guard_hex_id(getval("guard_pid"), &guard_id)
++		 || !deadline_text || !*deadline_text) {
++			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor requires port=auto, libusb-1.0, exact guard_vid/guard_pid and guard_deadline");
++		}
++		deadline = strtol(deadline_text, &end, 10);
++		if (!end || *end || deadline < 1 || deadline > 300) {
++			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor guard_deadline must be an integer from 1 to 300 seconds");
++		}
++		guarded_deadline_seconds = deadline;
++	}
+ 	if (use_usb) {
+ 		microlink_usb_open();
+ 	}
+@@ -3844,11 +3941,22 @@ void upsdrv_initinfo(void)
+ 	 * need that. */
+ 	microlink_configured_poll_interval = poll_interval;
+ 
++#ifdef WITH_USB
++	microlink_guard_deadline_begin();
++#endif /* WITH_USB */
+ 	if (microlink_start_session()) {
+ 		microlink_ready = 1;
+ 		while (microlink_ready && !microlink_startup_ready()) {
+ 			time_t now = microlink_now();
+ 
++#ifdef WITH_USB
++			if (is_usb && microlink_guard_deadline_expired()) {
++				upslogx(LOG_WARNING, "apcmicrolink: guarded startup deadline expired");
++				microlink_ready = 0;
++				break;
++			}
++#endif /* WITH_USB */
++
+ 			if (!microlink_poll_once(now) && consecutive_timeouts >= microlink_handshake_retries()) {
+ 				microlink_ready = 0;
+ 			}
+@@ -3945,10 +4053,12 @@ void upsdrv_updateinfo(void)
+ 		if (is_usb && microlink_usb_device_gone()) {
+ 			upslogx(LOG_NOTICE, "apcmicrolink: USB device appears to have been "
+ 				"disconnected (unresponsive for %ld s) - reopening once it "
+-				"reappears", (long)(now - microlink_fallback_since));
++					"reappears", (long)(now - microlink_fallback_since));
+ 			reopening = 1;
+-			if (microlink_usb_reset_and_reopen())
++			if (microlink_usb_reset_and_reopen()) {
++				microlink_guard_deadline_begin();
+ 				microlink_start_session();
++			}
+ 		} else if (microlink_fallback_retries > 0 && microlink_fallback_retries % 64 == 0) {
+ 			upslogx(LOG_NOTICE, "apcmicrolink: Microlink tunnel unresponsive for "
+ 				"%ld s (%u consecutive failed retries)",
+@@ -3956,8 +4066,12 @@ void upsdrv_updateinfo(void)
+ 		}
+ #endif
+ 
+-		if (!reopening)
++		if (!reopening) {
++#ifdef WITH_USB
++			microlink_guard_deadline_begin();
++#endif /* WITH_USB */
+ 			microlink_start_session_impl(1);
++		}
+ 
+ 		if (!session_ready) {
+ 			microlink_fallback_retries++;
+@@ -4034,6 +4148,11 @@ void upsdrv_updateinfo(void)
+ void upsdrv_shutdown(void)
+ {
+ 	int ret;
++	if (!nut_guard_allows_control(guarded_monitor)) {
++		upslogx(LOG_ERR, "apcmicrolink: guarded_monitor refuses shutdown");
++		set_exit_flag(EF_EXIT_FAILURE);
++		return;
++	}
+ 
+ 	ret = instcmd("shutdown.return", NULL);
+ 	if (ret != STAT_INSTCMD_HANDLED) {
+diff --git a/drivers/libusb1.c b/drivers/libusb1.c
+index 65266c268..cd5da57f1 100644
+--- a/drivers/libusb1.c
++++ b/drivers/libusb1.c
+@@ -41,6 +41,10 @@
+ #include "nut_libusb.h"
+ #include "nut_stdint.h"
+ #include "nut_bool.h"
++#include "nut-guarded-policy.h"
++
++#include <ctype.h>
++#include <stdlib.h>
+ 
+ #ifndef WIN32
+ # include <signal.h>	/* sigaction(), SIGALRM for the atexit watchdog */
+@@ -90,6 +94,50 @@ upsdrv_info_t comm_upsdrv_info = {
+ static libusb_context	*nut_usb_ctx = NULL;
+ static nut_bool_t	 nut_usb_ctx_initialized = false;
+ 
++static int nut_libusb_guarded_monitor(void)
++{
++	return testvar("guarded_monitor");
++}
++
++typedef struct {
++	libusb_device **devices;
++	libusb_device_handle **handle;
++	uint16_t vid, pid;
++	struct libusb_device_descriptor selected_descriptor;
++} nut_guard_usb_context_t;
++
++static int nut_guard_read_usb_id(void *opaque, size_t index,
++	uint16_t *vid, uint16_t *pid)
++{
++	nut_guard_usb_context_t *context = (nut_guard_usb_context_t *)opaque;
++	struct libusb_device_descriptor descriptor;
++	int ret = libusb_get_device_descriptor(context->devices[index], &descriptor);
++	if (ret != LIBUSB_SUCCESS)
++		return ret;
++	*vid = descriptor.idVendor;
++	*pid = descriptor.idProduct;
++	if (*vid == context->vid && *pid == context->pid)
++		context->selected_descriptor = descriptor;
++	return 0;
++}
++
++static int nut_guard_open_usb_device(void *opaque, size_t index)
++{
++	nut_guard_usb_context_t *context = (nut_guard_usb_context_t *)opaque;
++	return libusb_open(context->devices[index], context->handle);
++}
++
++typedef struct {
++	libusb_device_handle *handle;
++	int interface_index;
++} nut_guard_claim_context_t;
++
++static int nut_guard_claim_usb_interface(void *opaque)
++{
++	nut_guard_claim_context_t *context = (nut_guard_claim_context_t *)opaque;
++	return libusb_claim_interface(context->handle, context->interface_index);
++}
++
+ #ifndef WIN32
+ __attribute__((noreturn))
+ static void nut_libusb_cleanup_alarm(int sig)
+@@ -158,6 +206,10 @@ void nut_usb_addvars(void)
+ 
+ 	addvar(VAR_VALUE, "vendorid", "Regular expression to match UPS Manufacturer numerical ID (4 digits hexadecimal)");
+ 	addvar(VAR_VALUE, "productid", "Regular expression to match UPS Product numerical ID (4 digits hexadecimal)");
++	addvar(VAR_FLAG, "guarded_monitor", "Experimental guarded apcmicrolink profile; requires exact guard_vid, guard_pid and guard_deadline");
++	addvar(VAR_VALUE, "guard_vid", "Exact four-digit hexadecimal vendor ID for guarded_monitor");
++	addvar(VAR_VALUE, "guard_pid", "Exact four-digit hexadecimal product ID for guarded_monitor");
++	addvar(VAR_VALUE, "guard_deadline", "Guarded profile monotonic startup/poll receive deadline in seconds (1..300)");
+ 
+ 	addvar(VAR_VALUE, "bus", "Regular expression to match USB bus name");
+ 	addvar(VAR_VALUE, "device", "Regular expression to match USB device name");
+@@ -303,6 +355,10 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 	int count_open_EACCESS = 0;
+ 	int count_open_errors = 0;
+ 	int count_open_attempts = 0;
++	int guarded_monitor = nut_libusb_guarded_monitor();
++	uint16_t guard_vid = 0, guard_pid = 0;
++	size_t guard_target = 0;
++	nut_guard_usb_context_t guard_context;
+ 
+ 	/* report descriptor */
+ 	unsigned char	rdbuf[MAX_REPORT_SIZE];
+@@ -379,6 +435,35 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ #endif
+ 
+ 	devcount = libusb_get_device_list(nut_usb_ctx, &devlist);
++	if (guarded_monitor) {
++		const char *vid = getval("guard_vid");
++		const char *pid = getval("guard_pid");
++
++		if (devcount < 0) {
++			fatalx(EXIT_FAILURE, "guarded_monitor could not enumerate USB descriptors; refusing to open handles");
++		}
++		if (!nut_guard_hex_id(vid, &guard_vid)
++		 || !nut_guard_hex_id(pid, &guard_pid)) {
++			libusb_free_device_list(devlist, 1);
++			fatalx(EXIT_FAILURE, "guarded_monitor requires exact guard_vid/guard_pid");
++		}
++		if (testvar("usb_set_altinterface")) {
++			libusb_free_device_list(devlist, 1);
++			fatalx(EXIT_FAILURE, "guarded_monitor refuses usb_set_altinterface");
++		}
++		memset(&guard_context, 0, sizeof(guard_context));
++		guard_context.devices = devlist;
++		guard_context.handle = udevp;
++		guard_context.vid = guard_vid;
++		guard_context.pid = guard_pid;
++		ret = nut_guard_open_unique((size_t)devcount, guard_vid, guard_pid,
++			nut_guard_read_usb_id, nut_guard_open_usb_device,
++			&guard_context, &guard_target);
++		if (ret != 0) {
++			libusb_free_device_list(devlist, 1);
++			fatalx(EXIT_FAILURE, "guarded_monitor USB pre-open gate failed (%d); refusing other device handles", ret);
++		}
++	}
+ 
+ 	/* devcount may be < 0, loop will get skipped;
+ 	 * its SSIZE_MAX < SIZE_MAX for devnum */
+@@ -386,8 +471,13 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 		/* int		if_claimed = 0; */
+ 		libusb_device	*device = devlist[devnum];
+ 
++		if (guarded_monitor && devnum != guard_target)
++			continue;
+ 		count_open_attempts++;
+-		libusb_get_device_descriptor(device, &dev_desc);
++		if (guarded_monitor)
++			dev_desc = guard_context.selected_descriptor;
++		else
++			libusb_get_device_descriptor(device, &dev_desc);
+ 		upsdebugx(2, "Checking device %" PRIuSIZE " of %" PRIiSIZE " (%04X/%04X)",
+ 			devnum + 1, devcount,
+ 			dev_desc.idVendor, dev_desc.idProduct);
+@@ -395,7 +485,7 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 		/* supported vendors are now checked by the supplied matcher */
+ 
+ 		/* open the device */
+-		ret = libusb_open(device, udevp);
++		ret = guarded_monitor ? LIBUSB_SUCCESS : libusb_open(device, udevp);
+ 		if (ret != 0) {
+ 			upsdebugx(1, "Failed to open device (%04X/%04X), skipping: %s",
+ 				dev_desc.idVendor,
+@@ -580,8 +670,28 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 		if (ret < 0)
+ 			upsdebugx(2, "result: %i (%s)",
+ 				ret, libusb_strerror((enum libusb_error)ret));
++		if (guarded_monitor && (ret < 0 || !conf_desc)) {
++			libusb_close(udev);
++			*udevp = NULL;
++			libusb_free_device_list(devlist, 1);
++			fatalx(EXIT_FAILURE, "guarded_monitor refuses unreadable USB configuration descriptor");
++		}
+ 
+ 		/* Now we have matched the device we wanted. Claim it. */
++		if (guarded_monitor) {
++			nut_guard_claim_context_t claim_context;
++			claim_context.handle = udev;
++			claim_context.interface_index = usb_subdriver.hid_rep_index;
++			ret = nut_guard_claim_once(nut_guard_claim_usb_interface, &claim_context);
++			if (ret != LIBUSB_SUCCESS) {
++				if (conf_desc) libusb_free_config_descriptor(conf_desc);
++				libusb_close(udev);
++				*udevp = NULL;
++				libusb_free_device_list(devlist, 1);
++				fatalx(EXIT_FAILURE, "guarded_monitor refuses interface claim failure without kernel-driver detach/retry: %s",
++					libusb_strerror((enum libusb_error)ret));
++			}
++		}
+ 
+ #if defined(HAVE_LIBUSB_KERNEL_DRIVER_ACTIVE) && defined(HAVE_LIBUSB_SET_AUTO_DETACH_KERNEL_DRIVER)
+ 		/* Due to the way FreeBSD implements libusb_set_auto_detach_kernel_driver(),
+@@ -593,7 +703,9 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 		 * Is the kernel driver active? Consider the unimplemented
+ 		 * return code to be equivalent to inactive here.
+ 		 */
+-		if((ret = libusb_kernel_driver_active(udev, usb_subdriver.hid_rep_index)) == 1) {
++		if (guarded_monitor) {
++			upsdebugx(3, "guarded_monitor: kernel-driver detach is disabled");
++		} else if((ret = libusb_kernel_driver_active(udev, usb_subdriver.hid_rep_index)) == 1) {
+ 			upsdebugx(3, "libusb_kernel_driver_active() returned 1 (driver active)");
+ 			/* Try the auto-detach kernel driver method.
+ 			 * This function is not available on FreeBSD 10.1-10.3 */
+@@ -615,11 +727,13 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 		 * This function is available on FreeBSD 10.1-10.3 */
+ # ifdef WIN32
+ 		/* TODO: Align with libusb1 - initially from Windows branch made against libusb0 */
+-		libusb_set_configuration(udev, 1);
++		if (!guarded_monitor)
++			libusb_set_configuration(udev, 1);
+ # endif	/* WIN32 */
+ 
+-		retries = 3;
+-		while ((ret = libusb_claim_interface(udev, usb_subdriver.hid_rep_index)) != LIBUSB_SUCCESS) {
++		if (!guarded_monitor) {
++			retries = 3;
++			while ((ret = libusb_claim_interface(udev, usb_subdriver.hid_rep_index)) != LIBUSB_SUCCESS) {
+ 			upsdebugx(2, "failed to claim USB device: %s",
+ 				libusb_strerror((enum libusb_error)ret));
+ 
+@@ -658,8 +772,9 @@ static int nut_libusb_open(libusb_device_handle **udevp,
+ 				usb_subdriver.hid_desc_index,
+ 				libusb_strerror((enum libusb_error)ret));
+ 		}
++		}
+ #else
+-		if ((ret = libusb_claim_interface(udev, usb_subdriver.hid_rep_index)) != LIBUSB_SUCCESS ) {
++		if (!guarded_monitor && (ret = libusb_claim_interface(udev, usb_subdriver.hid_rep_index)) != LIBUSB_SUCCESS ) {
+ 			if (ret == LIBUSB_ERROR_BUSY && testvar("allow_duplicates")) {
+ 				upsdebugx(2, "Configured to allow_duplicates so looking for another similar device");
+ 				goto next_device;
+diff --git a/drivers/main.c b/drivers/main.c
+index 3fe29e217..0151c3858 100644
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -2746,6 +2746,10 @@ int main(int argc, char **argv)
+ 	}
+ # endif	/* !WIN32 */
+ 
++	if (do_forceshutdown && testvar("guarded_monitor")) {
++		fatalx(EXIT_FAILURE, "guarded_monitor refuses -k before contacting another driver instance");
++	}
++
+ 	if (do_forceshutdown) {
+ 		/* First try to handle this over socket protocol
+ 		 * with the running older driver instance (if any);
+diff --git a/drivers/nut-guarded-policy.h b/drivers/nut-guarded-policy.h
+new file mode 100644
+index 000000000..af5a71665
+--- /dev/null
++++ b/drivers/nut-guarded-policy.h
+@@ -0,0 +1,86 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later
++ * Experimental Network UPS Tools source helper, not application MIT code. */
++#ifndef NUT_GUARDED_POLICY_H
++#define NUT_GUARDED_POLICY_H
++
++#include <ctype.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++typedef int (*nut_guard_read_id_fn)(void *, size_t, uint16_t *, uint16_t *);
++typedef int (*nut_guard_open_fn)(void *, size_t);
++
++/* Return 0 only after exactly one matching descriptor has been opened. */
++static inline int nut_guard_open_unique(size_t count, uint16_t vid, uint16_t pid,
++	nut_guard_read_id_fn read_id, nut_guard_open_fn open_device, void *context,
++	size_t *selected)
++{
++	size_t i, matches = 0, found = 0;
++	uint16_t candidate_vid, candidate_pid;
++
++	if (!read_id || !open_device || !selected)
++		return -1;
++	for (i = 0; i < count; i++) {
++		if (read_id(context, i, &candidate_vid, &candidate_pid) != 0)
++			return -2;
++		if (candidate_vid == vid && candidate_pid == pid) {
++			found = i;
++			matches++;
++		}
++	}
++	if (matches != 1)
++		return -3;
++	*selected = found;
++	return open_device(context, found) == 0 ? 0 : -4;
++}
++
++static inline int nut_guard_hex_id(const char *text, uint16_t *value)
++{
++	char *end = NULL;
++	unsigned long parsed;
++	size_t i;
++
++	if (!text || !value || strlen(text) != 4)
++		return 0;
++	for (i = 0; i < 4; i++) {
++		if (!isxdigit((unsigned char)text[i]))
++			return 0;
++	}
++	parsed = strtoul(text, &end, 16);
++	if (!end || *end || parsed > 0xFFFFUL)
++		return 0;
++	*value = (uint16_t)parsed;
++	return 1;
++}
++
++static inline int nut_guard_claim_once(int (*claim)(void *), void *context)
++{
++	return claim ? claim(context) : -1;
++}
++
++static inline int nut_guard_allows_control(int guarded)
++{
++	return !guarded;
++}
++
++static inline void nut_guard_maybe_reset(int guarded,
++	void (*reset)(void *), void *context)
++{
++	if (!guarded && reset)
++		reset(context);
++}
++
++/* An unavailable or invalid clock reading fails closed. */
++static inline int nut_guard_deadline_expired(double limit,
++	int (*elapsed)(void *, double *), void *context)
++{
++	double seconds = 0;
++	if (!(limit > 0) || limit > 300.0 || !elapsed
++	 || elapsed(context, &seconds) != 0 || !(seconds >= 0))
++		return 1;
++	return seconds >= limit;
++}
++
++#endif

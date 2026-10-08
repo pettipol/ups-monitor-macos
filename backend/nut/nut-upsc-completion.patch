@@ -1,0 +1,44 @@
+diff --git a/clients/upsc.c b/clients/upsc.c
+index 2a7efdf97..f270dd2de 100644
+--- a/clients/upsc.c
++++ b/clients/upsc.c
+@@ -203,7 +203,7 @@ static void list_vars(void)
+ 		fatalx(EXIT_FAILURE, "Error: %s", NUT_STRARG(msg));
+ 	}
+ 
+-	while (upscli_list_next(ups, numq, query, &numa, &answer) == 1) {
++	while ((ret = upscli_list_next(ups, numq, query, &numa, &answer)) == 1) {
+ 
+ 		/* VAR <upsname> <varname> <val> */
+ 		if (numa < 4) {
+@@ -230,6 +230,10 @@ static void list_vars(void)
+ 		}
+ 	}
+ 
++	if (ret < 0) {
++		fatalx(EXIT_FAILURE, "Error: incomplete variable list: %s", upscli_strerror(ups));
++	}
++
+ 	if (output_json) {
+ 		printf("\n}\n");
+ 	}
+diff --git a/clients/upsclient.c b/clients/upsclient.c
+index e6793e80b..76a7beb48 100644
+--- a/clients/upsclient.c
++++ b/clients/upsclient.c
+@@ -3332,8 +3332,14 @@ int upscli_list_next(UPSCONN_t *ups, size_t numq, const char **query,
+ 	/* see if this is the end */
+ 	if (ups->pc_ctx.numargs >= 2) {
+ 		if ((!strcmp(ups->pc_ctx.arglist[0], "END")) &&
+-			(!strcmp(ups->pc_ctx.arglist[1], "LIST")))
++			(!strcmp(ups->pc_ctx.arglist[1], "LIST"))) {
++			if (ups->pc_ctx.numargs != numq + 2 ||
++				!verify_resp(numq, query, &ups->pc_ctx.arglist[2])) {
++				ups->upserror = UPSCLI_ERR_PROTOCOL;
++				return -1;
++			}
+ 			return 0;
++		}
+ 	}
+ 
+ 	/* q: VAR <ups> */
