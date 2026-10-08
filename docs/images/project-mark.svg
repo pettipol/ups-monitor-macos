@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">UPS Monitor Mac project mark</title>
+  <desc id="desc">An original monitor trace inside a power reserve outline.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="#242728"/>
+  <rect x="24" y="32" width="74" height="64" rx="8" fill="none" stroke="#f5f7f6" stroke-width="6"/>
+  <path d="M102 51h6v26h-6" fill="#f5f7f6"/>
+  <path d="M35 65h12l8-16 15 32 9-16h9" fill="none" stroke="#46d1a0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

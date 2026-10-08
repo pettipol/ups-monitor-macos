@@ -120,8 +120,13 @@ Browser tests cover old-session pagination, exact-page exports, deletion,
 terminal close, and separation from live selection/recording. Library tests
 cover indexed pagination and plot gaps/provenance. Save-panel actions, visual layout, accessibility,
 menu interaction and live app history still require interactive verification.
-The first app process launched, but the UI inspection tool timed out; process
-existence and a successful build are not UI acceptance.
+The first app process launched, but the UI inspection tool timed out. On
+2026-10-08, an explicitly authorized restart into the latest synthetic preview
+allowed a partial interactive check: details scrolling, the history-metric
+picker and missing-data state, static Refresh, and normal application-menu
+Quit/reopen. Genuine window captures and remaining limits are recorded in
+[visual evidence](SCREENSHOTS.md). This does not qualify live acquisition,
+backend/source selection, exports, the menu-bar popover or VoiceOver.
 
 The native session probe has produced one qualitative observation from a real
 Apple UPS source: status, battery charge (ratio) and battery voltage (V) were

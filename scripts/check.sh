@@ -100,6 +100,9 @@ plutil -lint \
     UPSMonitor.xcodeproj/project.pbxproj \
     App/Info.plist App/Shared.entitlements \
     Widget/Info.plist Widget/Local.entitlements Widget/Shared.entitlements
+bash "$SCRIPT_DIR/check-version.sh"
+printf '\n== Version metadata regression tests ==\n'
+bash "$SCRIPT_DIR/test-versioning.sh"
 
 printf '\n== Ad-hoc Xcode Release build ==\n'
 DERIVED_DATA="$ROOT/.build/validation-app"

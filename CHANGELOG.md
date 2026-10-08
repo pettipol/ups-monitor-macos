@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Changes for a later version will be recorded here.
+
+## [0.1.0-preview.1] - Source preview
+
+Date: 2026-10-08
+
+- Established the macOS menu-bar app, details window, opt-in SQLite history,
+  stored-session browser, local alert policy and small/medium widget source.
+  Synthetic tests cover these boundaries; signed App Group access and installed
+  widget behavior remain unqualified.
+- Added synthetic-preview screenshots and project presentation notes. Basic
+  GUI checks covered scrolling, history-metric selection, refresh and quit/relaunch;
+  VoiceOver, broader accessibility, widget rendering and hardware remain open.
+- Added a bounded offscreen SwiftUI render probe with eight synthetic cases;
+  complex-control placeholders and non-system-hosted output are documented.
 - Connected the in-memory session energy tracker to the app's selected source,
   with separate input and UPS active-watt channels, covered Wh, breaks and
   provenance.
@@ -9,8 +24,11 @@
   that does not depend on history recording.
 - Exposed the coordinator's monotonic successful-receipt time before sink work
   so energy intervals use acquisition receipt timing rather than UI refreshes.
+- Added the canonical `0.1.0-preview.1` SemVer, checked bundle metadata and
+  synthetic version-drift tests. Apple bundle version fields remain numeric;
+  this source version is not a release or hardware qualification.
 - Updated public compatibility, build, contribution and third-party licensing
-  guidance. The local synthetic suite passed; rendered UI and live watt
-  qualification remain open.
-- Added a pinned hosted-CI configuration and local synthetic validation entry
-  point. Hosted execution remains unverified until the repository is published.
+  guidance. Live watt qualification remains open.
+- Added pinned hosted CI and local synthetic validation. The first hosted run
+  passed source, test and ad-hoc build checks; these do not qualify widget
+  installation, VoiceOver or real hardware.
