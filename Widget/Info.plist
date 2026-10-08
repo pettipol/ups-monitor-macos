@@ -10,6 +10,7 @@
     <key>UPSMonitorSemVer</key><string>0.1.0-preview.1</string>
     <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>UPSAppGroupIdentifier</key><string>$(UPS_APP_GROUP_ID)</string>
+    <key>UPSWidgetFixtureMode</key><string>$(UPS_WIDGET_FIXTURE_MODE)</string>
     <key>NSExtension</key><dict>
         <key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
     </dict>

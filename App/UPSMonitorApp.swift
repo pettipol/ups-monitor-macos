@@ -52,7 +52,9 @@ private struct MonitorMenu: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.isPreview { Text("Synthetic preview").font(.caption).foregroundStyle(.orange).padding(.top, 10) }
+            if model.isSyntheticMode {
+                Text(model.syntheticModeTitle).font(.caption).foregroundStyle(.orange).padding(.top, 10)
+            }
             UPSMenuContentView(
                 sources: model.sources, selectedSourceKey: model.selectedSourceKey,
                 readState: model.readState, now: model.now, maximumAge: model.maximumAge,
@@ -79,8 +81,8 @@ private struct MonitorWindow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                if model.isPreview {
-                    Label("Synthetic preview", systemImage: "bolt.horizontal.circle")
+                if model.isSyntheticMode {
+                    Label(model.syntheticModeTitle, systemImage: "bolt.horizontal.circle")
                 } else {
                     Picker("Backend", selection: Binding(
                         get: { model.backend },
@@ -104,22 +106,22 @@ private struct MonitorWindow: View {
                     if model.backendTransition { ProgressView().controlSize(.small) }
                 }
                 Spacer(minLength: 8)
-                Button { model.showsAlertSettings = true } label: {
-                    Image(systemName: model.alerts.isEnabled ? "bell.badge" : "bell")
+                if !model.isSyntheticMode {
+                    Button { model.showsAlertSettings = true } label: {
+                        Image(systemName: model.alerts.isEnabled ? "bell.badge" : "bell")
+                    }
+                    .help("Local alert settings")
+                    .accessibilityLabel("Local alert settings")
+                    Button { Task { await model.openHistoryBrowser() } } label: { Image(systemName: "clock") }
+                        .help("Browse stored history")
+                        .accessibilityLabel("Browse stored history")
+                    Toggle("Record history", isOn: Binding(
+                        get: { model.recordsHistory },
+                        set: { enabled in Task { await model.setHistoryRecording(enabled) } }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(model.historyTransition)
                 }
-                .help("Local alert settings")
-                .accessibilityLabel("Local alert settings")
-                .disabled(model.isPreview)
-                Button { Task { await model.openHistoryBrowser() } } label: { Image(systemName: "clock") }
-                    .help("Browse stored history")
-                    .accessibilityLabel("Browse stored history")
-                    .disabled(model.isPreview)
-                Toggle("Record history", isOn: Binding(
-                    get: { model.recordsHistory },
-                    set: { enabled in Task { await model.setHistoryRecording(enabled) } }
-                ))
-                .toggleStyle(.switch)
-                .disabled(model.isPreview || model.historyTransition)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
@@ -156,7 +158,7 @@ private struct MonitorWindow: View {
                 acquisitionSucceeded: model.acquisitionSucceeded,
                 history: model.history,
                 energyEstimates: model.energyEstimates,
-                onResetEnergy: !model.isPreview ? { @MainActor @Sendable [model] in model.resetEnergy() } : nil,
+                onResetEnergy: !model.isSyntheticMode ? { @MainActor @Sendable [model] in model.resetEnergy() } : nil,
                 onExportEnergy: model.canExportEnergy ? { @MainActor @Sendable [model] in model.exportEnergy() } : nil,
                 onSelect: { model.select($0) }, onRefresh: { model.refresh() },
                 onExportJSON: model.canExport ? { @MainActor @Sendable [model] in model.export(.json) } : nil,

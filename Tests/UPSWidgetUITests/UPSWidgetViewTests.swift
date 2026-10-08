@@ -58,6 +58,14 @@ final class UPSWidgetViewTests: XCTestCase {
         _ = UPSWidgetView(payload: payload, date: date, isMedium: true)
         _ = UPSWidgetView(payload: nil, date: date, isMedium: false,
                           unavailableReason: "Widget not configured")
+        _ = UPSWidgetView(payload: nil, date: date, isMedium: false,
+                          unavailableReason: "Widget configuration invalid", isSyntheticFixture: true)
+        XCTAssertEqual(UPSWidgetPresentation.headerLabel(providerLabel: "Local NUT", isSyntheticFixture: true),
+                       "Synthetic UPS")
+        XCTAssertEqual(UPSWidgetPresentation.headerLabel(providerLabel: "Local NUT", isSyntheticFixture: false),
+                       "UPS · Local NUT")
+        XCTAssertEqual(UPSWidgetPresentation.syntheticMarkerLabel(isSyntheticFixture: true), "Synthetic UPS")
+        XCTAssertNil(UPSWidgetPresentation.syntheticMarkerLabel(isSyntheticFixture: false))
     }
 
     private func makeSnapshot(at date: Date, charge: Double? = 74, includePower: Bool = false) -> MonitorSnapshot {

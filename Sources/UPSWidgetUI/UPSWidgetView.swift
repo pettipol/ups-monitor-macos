@@ -8,12 +8,15 @@ public struct UPSWidgetView: View {
     public let date: Date
     public let isMedium: Bool
     public let unavailableReason: String?
+    public let isSyntheticFixture: Bool
 
-    public init(payload: WidgetSnapshot?, date: Date, isMedium: Bool, unavailableReason: String? = nil) {
+    public init(payload: WidgetSnapshot?, date: Date, isMedium: Bool, unavailableReason: String? = nil,
+                isSyntheticFixture: Bool = false) {
         self.payload = payload
         self.date = date
         self.isMedium = isMedium
         self.unavailableReason = unavailableReason
+        self.isSyntheticFixture = isSyntheticFixture
     }
 
     public var body: some View {
@@ -71,7 +74,10 @@ public struct UPSWidgetView: View {
         HStack(spacing: 6) {
             Image(systemName: UPSWidgetPresentation.symbol(payload: payload, date: date))
                 .accessibilityHidden(true)
-            Text("UPS · \(UPSMonitorFormatters.providerLabel(snapshot.source.provider))")
+            Text(UPSWidgetPresentation.headerLabel(
+                providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                isSyntheticFixture: isSyntheticFixture
+            ))
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
             Spacer(minLength: 0)
@@ -144,6 +150,11 @@ public struct UPSWidgetView: View {
             Image(systemName: UPSWidgetPresentation.symbol(payload: payload, date: date))
                 .font(.title3)
                 .accessibilityHidden(true)
+            if let marker = UPSWidgetPresentation.syntheticMarkerLabel(isSyntheticFixture: isSyntheticFixture) {
+                Text(marker)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
             Text(UPSWidgetPresentation.stateLabel(payload: payload, date: date,
                                                   unavailableReason: unavailableReason))
                 .font(.subheadline.weight(.semibold))
@@ -154,6 +165,14 @@ public struct UPSWidgetView: View {
 }
 
 enum UPSWidgetPresentation {
+    static func syntheticMarkerLabel(isSyntheticFixture: Bool) -> String? {
+        isSyntheticFixture ? "Synthetic UPS" : nil
+    }
+
+    static func headerLabel(providerLabel: String, isSyntheticFixture: Bool) -> String {
+        isSyntheticFixture ? "Synthetic UPS" : "UPS · \(providerLabel)"
+    }
+
     static func stateLabel(payload: WidgetSnapshot?, date: Date, unavailableReason: String? = nil) -> String {
         guard let payload else { return unavailableReason ?? "Widget data unavailable" }
         guard (try? payload.validate()) != nil else { return unavailableReason ?? "Widget data unavailable" }

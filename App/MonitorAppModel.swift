@@ -43,6 +43,16 @@ final class MonitorAppModel {
     let alerts: UPSAlertController
     var energyEstimates = MonitorEnergyTracker().summaries
     let isPreview: Bool
+    let widgetFixtureMode: WidgetFixtureMode
+
+    var isWidgetFixture: Bool { !isPreview && widgetFixtureMode == .enabled }
+    var isWidgetConfigurationInvalid: Bool { !isPreview && widgetFixtureMode == .invalid }
+    var isSyntheticMode: Bool { isPreview || isWidgetFixture || isWidgetConfigurationInvalid }
+    var syntheticModeTitle: String {
+        if isWidgetFixture { return "Synthetic widget test" }
+        if isWidgetConfigurationInvalid { return "Synthetic preview · widget configuration invalid" }
+        return "Synthetic preview"
+    }
 
     @ObservationIgnored private var started = false
     @ObservationIgnored private var stopped = false
@@ -78,6 +88,7 @@ final class MonitorAppModel {
         historyDirectoryURL: URL? = nil,
         observesWorkspace: Bool = true,
         isPreview: Bool = ProcessInfo.processInfo.arguments.contains("--synthetic-preview"),
+        widgetFixtureMode: WidgetFixtureMode? = nil,
         widgetPublisher: WidgetSnapshotPublisher? = nil,
         alerts: UPSAlertController? = nil,
         nutReadFactory: @escaping @Sendable (NUTConnectionDraft) async throws -> MonitorCoordinator.Read = MonitorAppModel.makeNUTRead
@@ -88,6 +99,7 @@ final class MonitorAppModel {
         self.historyDirectoryURL = historyDirectoryURL
         self.observesWorkspace = observesWorkspace
         self.isPreview = isPreview
+        self.widgetFixtureMode = widgetFixtureMode ?? WidgetGroupConfiguration.fixtureMode()
         self.now = clock()
         self.widgetPublisher = widgetPublisher
         self.alerts = alerts ?? UPSAlertController()
@@ -108,8 +120,8 @@ final class MonitorAppModel {
         return "\(Int(value.rounded()))%"
     }
 
-    var canExport: Bool { !stopped && historyStore != nil && !(history?.isEmpty ?? true) && !isPreview }
-    var canExportEnergy: Bool { !stopped && !isPreview && energyEstimates.contains { $0.energyWh != nil } }
+    var canExport: Bool { !stopped && historyStore != nil && !(history?.isEmpty ?? true) && !isSyntheticMode }
+    var canExportEnergy: Bool { !stopped && !isSyntheticMode && energyEstimates.contains { $0.energyWh != nil } }
 
     func startIfNeeded() async {
         guard !started, !stopped else { return }
@@ -118,10 +130,18 @@ final class MonitorAppModel {
             applyPreview()
             return
         }
+        if isWidgetConfigurationInvalid {
+            applyPreview()
+            acquisitionSucceeded = false
+            readState = .failed
+            operationMessage = "Widget fixture configuration invalid; live monitoring disabled"
+            return
+        }
         configureWidgetSharing()
         do {
-            coordinator = try makeCoordinator(read: appleRead(), generation: backendGeneration)
-            if observesWorkspace { installWorkspaceObservers() }
+            let read = isWidgetFixture ? widgetFixtureRead() : appleRead()
+            coordinator = try makeCoordinator(read: read, generation: backendGeneration)
+            if observesWorkspace && !isWidgetFixture { installWorkspaceObservers() }
             await coordinator?.start()
             guard !stopped else { await coordinator?.stop(); return }
             startStateUpdates()
@@ -133,7 +153,7 @@ final class MonitorAppModel {
     }
 
     func refresh() {
-        guard !isPreview, !stopped, !backendTransition, !sleeping else { return }
+        guard !isSyntheticMode, !stopped, !backendTransition, !sleeping else { return }
         let generation = backendGeneration
         Task {
             guard !stopped, generation == backendGeneration, !backendTransition, !sleeping else { return }
@@ -144,7 +164,7 @@ final class MonitorAppModel {
     }
 
     func select(_ key: String) {
-        guard !stopped,
+        guard !isSyntheticMode, !stopped,
               sources.contains(where: { UPSMonitorFormatters.sourceKey(for: $0) == key }) else { return }
         let changesSelection = selectedSourceKey != key
         selectedSourceKey = key
@@ -169,12 +189,12 @@ final class MonitorAppModel {
     }
 
     func setAlertsEnabled(_ enabled: Bool) async {
-        guard !isPreview, !stopped else { return }
+        guard !isSyntheticMode, !stopped else { return }
         await alerts.setEnabled(enabled)
     }
 
     func setAlertPolicy(_ policy: UPSAlertPolicy) {
-        guard !isPreview, !stopped else { return }
+        guard !isSyntheticMode, !stopped else { return }
         alerts.setPolicy(policy)
     }
 
@@ -208,7 +228,7 @@ final class MonitorAppModel {
     }
 
     func setHistoryRecording(_ enabled: Bool) async {
-        guard !isPreview, !stopped, !historyTransition else { return }
+        guard !isSyntheticMode, !stopped, !historyTransition else { return }
         historyTransition = true
         defer { historyTransition = false }
         if !enabled {
@@ -226,7 +246,7 @@ final class MonitorAppModel {
     }
 
     func openHistoryBrowser() async {
-        guard !isPreview, !stopped else { return }
+        guard !isSyntheticMode, !stopped else { return }
         do {
             let store = try openHistoryStore()
             historyBrowser?.close()
@@ -261,7 +281,7 @@ final class MonitorAppModel {
     }
 
     func clearHistory() async {
-        guard let historyStore, !isPreview, !stopped else { return }
+        guard let historyStore, !isSyntheticMode, !stopped else { return }
         do {
             _ = try await historyStore.clear()
             guard !stopped else { return }
@@ -277,7 +297,7 @@ final class MonitorAppModel {
     }
 
     func export(_ format: HistoryExportFormat) {
-        guard let historyStore, let selected, !isPreview, !stopped else { return }
+        guard let historyStore, let selected, !isSyntheticMode, !stopped else { return }
         let capturedSource = selected.source
         let end = now
         Task {
@@ -343,7 +363,7 @@ final class MonitorAppModel {
     }
 
     private func updateAlerts() {
-        guard !isPreview, !stopped, !sleeping, !alertSelectionTransition,
+        guard !isSyntheticMode, !stopped, !sleeping, !alertSelectionTransition,
               alerts.isEnabled, !alerts.isBusy, alertObservationTask == nil else { return }
         let snapshot = selected
         let succeeded = acquisitionSucceeded
@@ -364,7 +384,7 @@ final class MonitorAppModel {
     }
 
     private func updateEnergy(receivedUptime: TimeInterval?) {
-        guard !isPreview, !stopped, !sleeping else { return }
+        guard !isSyntheticMode, !stopped, !sleeping else { return }
         if let boundary = energyResetBoundary, let selected {
             if selected.source == boundary.source && selected.capturedAt <= boundary.capturedAt { return }
             energyResetBoundary = nil
@@ -386,7 +406,7 @@ final class MonitorAppModel {
     }
 
     func resetEnergy() {
-        guard !isPreview, !stopped else { return }
+        guard !isSyntheticMode, !stopped else { return }
         resetEnergyState()
         energyResetBoundary = selected.map { ($0.source, $0.capturedAt) }
     }
@@ -418,11 +438,12 @@ final class MonitorAppModel {
     private func configureWidgetSharing() {
         guard widgetPublisher == nil else { return }
         do {
-            let directory = try WidgetGroupConfiguration.directoryURL()
+            let directory = try WidgetGroupConfiguration.directoryURL(bundle: .main, fixtureMode: widgetFixtureMode)
             let store = try WidgetSnapshotStore(directoryURL: directory, mode: .readWrite)
+            let widgetKind = WidgetGroupConfiguration.widgetKind(for: widgetFixtureMode)
             widgetPublisher = WidgetSnapshotPublisher(store: store) {
                 await MainActor.run {
-                    WidgetCenter.shared.reloadTimelines(ofKind: WidgetGroupConfiguration.widgetKind)
+                    WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
                 }
             }
         } catch WidgetGroupError.notConfigured {
@@ -433,7 +454,7 @@ final class MonitorAppModel {
     }
 
     private func updateWidget(acquisition: WidgetAcquisition, allowStopped: Bool = false) async {
-        guard !isPreview, (!stopped || allowStopped), let widgetPublisher else { return }
+        guard (!isSyntheticMode || isWidgetFixture), (!stopped || allowStopped), let widgetPublisher else { return }
         let date = clock()
         widgetSequence &+= 1
         let value = WidgetSnapshot(publishedAt: date, acquisition: acquisition, maximumAge: maximumAge,
@@ -492,7 +513,7 @@ final class MonitorAppModel {
     }
 
     func chooseNUTExecutable() {
-        guard !isPreview, !stopped, !backendTransition else { return }
+        guard !isSyntheticMode, !stopped, !backendTransition else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose Completion-Qualified UPSC Client"
         panel.canChooseDirectories = false
@@ -505,7 +526,7 @@ final class MonitorAppModel {
     }
 
     func connectNUT() async {
-        guard !isPreview, !stopped, !backendTransition else { return }
+        guard !isSyntheticMode, !stopped, !backendTransition else { return }
         guard connectionDraft.canConnect else {
             connectionMessage = "Client qualification and valid settings required"
             return
@@ -526,7 +547,7 @@ final class MonitorAppModel {
     }
 
     func useAppleBackend() async {
-        guard !isPreview, !stopped, !backendTransition, backend != .apple else { return }
+        guard !isSyntheticMode, !stopped, !backendTransition, backend != .apple else { return }
         backendTransition = true
         defer { backendTransition = false }
         do {
@@ -555,6 +576,28 @@ final class MonitorAppModel {
             let observation = await reader.snapshot()
             return try AppleSnapshotRuntimeAdapter.snapshots(from: observation)
         }
+    }
+
+    private func widgetFixtureRead() -> MonitorCoordinator.Read {
+        let clock = self.clock
+        return { [clock] in [Self.makeWidgetFixture(at: clock())] }
+    }
+
+    nonisolated private static func makeWidgetFixture(at date: Date) -> MonitorSnapshot {
+        let source = MonitorSource(provider: .nut, id: "synthetic-widget-fixture",
+                                  sessionID: "synthetic-widget-session", identityStability: .configured)
+        let metrics = [
+            MonitorMetric(id: .batteryCharge, value: 74, unit: .percent,
+                          quality: .available, provenance: .reported),
+            MonitorMetric(id: .batteryRuntime, value: 2_100, unit: .seconds,
+                          quality: .available, provenance: .estimated),
+            MonitorMetric(id: .upsRealPower, value: 180, unit: .watts,
+                          quality: .available, provenance: .driverDerived),
+            MonitorMetric(id: .upsApparentPower, value: 215, unit: .voltAmps,
+                          quality: .available, provenance: .driverDerived),
+        ]
+        return MonitorSnapshot(source: source, capturedAt: date,
+                               status: MonitorStatus(lineState: .onLine, quality: .available), metrics: metrics)
     }
 
     private func makeCoordinator(read: @escaping MonitorCoordinator.Read, generation: UInt64) throws -> MonitorCoordinator {

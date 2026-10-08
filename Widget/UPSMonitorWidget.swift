@@ -24,8 +24,8 @@ struct UPSWidgetProvider: TimelineProvider, Sendable {
         Task {
             let now = Date()
             let initial = await Self.load(at: now)
-            let entries = [0.0, 300, 600, 900].map { offset in
-                UPSWidgetEntry(date: now.addingTimeInterval(offset), payload: initial.payload,
+            let entries = WidgetTimelineSchedule.dates(for: initial.payload, from: now).map { date in
+                UPSWidgetEntry(date: date, payload: initial.payload,
                                unavailableReason: initial.unavailableReason)
             }
             completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(900))))
@@ -33,8 +33,12 @@ struct UPSWidgetProvider: TimelineProvider, Sendable {
     }
 
     private static func load(at date: Date) async -> UPSWidgetEntry {
+        let mode = WidgetGroupConfiguration.fixtureMode()
+        guard mode != .invalid else {
+            return UPSWidgetEntry(date: date, payload: nil, unavailableReason: "Widget configuration invalid")
+        }
         do {
-            let directory = try WidgetGroupConfiguration.directoryURL()
+            let directory = try WidgetGroupConfiguration.directoryURL(fixtureMode: mode)
             let store = try WidgetSnapshotStore(directoryURL: directory, mode: .readOnly)
             let payload = try await store.read(now: date)
             return UPSWidgetEntry(date: date, payload: payload,
@@ -50,10 +54,11 @@ struct UPSWidgetProvider: TimelineProvider, Sendable {
 @main
 struct UPSMonitorWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: WidgetGroupConfiguration.widgetKind, provider: UPSWidgetProvider()) { entry in
+        let mode = WidgetGroupConfiguration.fixtureMode()
+        return StaticConfiguration(kind: WidgetGroupConfiguration.widgetKind(for: mode), provider: UPSWidgetProvider()) { entry in
             WidgetEntryView(entry: entry)
         }
-        .configurationDisplayName("UPS Monitor")
+        .configurationDisplayName(mode == .enabled ? "UPS Monitor Synthetic Test" : "UPS Monitor")
         .description("Last UPS capture, charge and measurements.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
@@ -65,7 +70,8 @@ private struct WidgetEntryView: View {
 
     var body: some View {
         UPSWidgetView(payload: entry.payload, date: entry.date, isMedium: family == .systemMedium,
-                      unavailableReason: entry.unavailableReason)
+                      unavailableReason: entry.unavailableReason,
+                      isSyntheticFixture: WidgetGroupConfiguration.isSyntheticFixture())
             .containerBackground(for: .widget) { Color.primary.opacity(0.035) }
     }
 }

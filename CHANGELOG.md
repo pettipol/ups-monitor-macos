@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added opt-in `UPS_WIDGET_FIXTURE_MODE=YES` for a synthetic widget fixture,
+  with `NO` as the default, fail-closed invalid plist values, separate fixture
+  storage and WidgetKit kind, and an explicit synthetic badge. The fixture does
+  not use the real reader, history recording, or alert delivery; preview mode
+  takes precedence without publishing shared widget data.
+- Added a widget timeline transition at capture time plus maximum age plus one
+  second for fresh valid payloads. This lets the UI reflect stale status after
+  the inclusive freshness boundary, but does not guarantee WidgetKit scheduling
+  at that time.
 - Added an offline, source-hash-fenced replay of the upstream HID fallback
   decoder/getter, comparing the pinned base and proposed correction. Synthetic
   source-fence tests run in normal validation; the C replay is a separate local
