@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Extended the offline NUT fallback replay to the exact publisher and a
+  test-only wrapper around callback reset statements, with two-file source
+  hashes and seven source-fence tests. It checks synthetic status emissions
+  and ordering, not real dstate, USB reopen, or hardware behavior. Recorded
+  already-included upstream HID descriptor parser fixes separately from the
+  remaining runtime-report and clock-rollback residuals.
 - Added opt-in `UPS_WIDGET_FIXTURE_MODE=YES` for a synthetic widget fixture,
   with `NO` as the default, fail-closed invalid plist values, separate fixture
   storage and WidgetKit kind, and an explicit synthetic badge. The fixture does

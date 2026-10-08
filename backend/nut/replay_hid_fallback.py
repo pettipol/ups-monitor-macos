@@ -17,11 +17,19 @@ REVISIONS = {
     BASE_REVISION: "base",
     FIX_REVISION: "fix",
 }
-SOURCE_SHA256 = {
-    BASE_REVISION: "6e35c6fdbd6a60abbf76f70d638079f0fcf710c07105ec717f52e8c4b1cd96be",
-    FIX_REVISION: "5f4073e7597ce7b5f2fb2f9b2b3ebc49278eb78d29ec5e09b999896112a19a21",
-}
 SOURCE_RELATIVE_PATH = Path("drivers/apcmicrolink-usb.c")
+PUBLISHER_SOURCE_RELATIVE_PATH = Path("drivers/apcmicrolink.c")
+SOURCE_RELATIVE_PATHS = (SOURCE_RELATIVE_PATH, PUBLISHER_SOURCE_RELATIVE_PATH)
+SOURCE_SHA256 = {
+    BASE_REVISION: {
+        SOURCE_RELATIVE_PATH: "6e35c6fdbd6a60abbf76f70d638079f0fcf710c07105ec717f52e8c4b1cd96be",
+        PUBLISHER_SOURCE_RELATIVE_PATH: "35fb79087eb7aee43ff14a30fd26ac21dc1586eed3fc94a43d80f1acfd241f3c",
+    },
+    FIX_REVISION: {
+        SOURCE_RELATIVE_PATH: "5f4073e7597ce7b5f2fb2f9b2b3ebc49278eb78d29ec5e09b999896112a19a21",
+        PUBLISHER_SOURCE_RELATIVE_PATH: "666a97bd870736a0b979a731225c4e41eb777d04e8ae786354a737a279561f19",
+    },
+}
 GENERATED_NAME = "hid_fallback_replay_generated.c"
 
 
@@ -42,7 +50,7 @@ def git_output(source_root: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def verify_source(source_root: Path, expected_revision: str) -> tuple[str, Path, bytes]:
+def verify_source(source_root: Path, expected_revision: str) -> tuple[str, dict[Path, bytes]]:
     if expected_revision not in REVISIONS:
         raise ReplayError("expected revision must be one of the two pinned full hashes")
 
@@ -56,14 +64,17 @@ def verify_source(source_root: Path, expected_revision: str) -> tuple[str, Path,
     if git_output(resolved, "status", "--porcelain", "--untracked-files=all"):
         raise ReplayError("source checkout must be clean; modified source is refused")
 
-    source_file = resolved / SOURCE_RELATIVE_PATH
-    if not source_file.is_file() or source_file.is_symlink():
-        raise ReplayError("expected tracked HID source file is missing or is a symlink")
-    source_bytes = source_file.read_bytes()
-    digest = hashlib.sha256(source_bytes).hexdigest()
-    if digest != SOURCE_SHA256[actual_revision]:
-        raise ReplayError("HID source file SHA-256 does not match the pinned source blob")
-    return REVISIONS[actual_revision], source_file, source_bytes
+    source_bytes: dict[Path, bytes] = {}
+    for relative_path in SOURCE_RELATIVE_PATHS:
+        source_file = resolved / relative_path
+        if not source_file.is_file() or source_file.is_symlink():
+            raise ReplayError(f"expected tracked source file is missing or is a symlink: {relative_path}")
+        content = source_file.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if digest != SOURCE_SHA256[actual_revision][relative_path]:
+            raise ReplayError(f"source SHA-256 does not match pinned blob: {relative_path}")
+        source_bytes[relative_path] = content
+    return REVISIONS[actual_revision], source_bytes
 
 
 def take_region(source: str, start_marker: str, end_marker: str, label: str) -> str:
@@ -76,8 +87,9 @@ def take_region(source: str, start_marker: str, end_marker: str, label: str) -> 
     return source[start:end].rstrip() + "\n"
 
 
-def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
-    source = source_bytes.decode("utf-8")
+def extract_translation_unit(source_files: dict[Path, bytes], revision: str) -> str:
+    source = source_files[SOURCE_RELATIVE_PATH].decode("utf-8")
+    publisher_source = source_files[PUBLISHER_SOURCE_RELATIVE_PATH].decode("utf-8")
     declarations_start = source.find(
         "typedef struct {\n\tint report_id;",
         source.find("/* Standard HID Power/Battery System Page"),
@@ -88,6 +100,12 @@ def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
     if declarations_end < 0:
         raise ReplayError("could not locate end of upstream fallback declarations")
     declarations = source[declarations_start:declarations_end].rstrip() + "\n"
+    report_id_declarations = take_region(
+        source,
+        "static int mlink_report_out = 0;",
+        "\n\n/* Standard HID Power/Battery System Page",
+        "fallback report ID declarations",
+    )
 
     extract_bits = take_region(
         source,
@@ -107,6 +125,24 @@ def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
         "\nint microlink_usb_hid_fallback_supported(",
         "microlink_usb_get_hid_fallback",
     )
+    reset_block = take_region(
+        source,
+        "\tmlink_report_out = 0;",
+        "\n\tif (rdbuf == NULL || rdlen <= 0)",
+        "report callback fallback reset block",
+    )
+    age_macro = take_region(
+        publisher_source,
+        "#define MLINK_HID_FALLBACK_MAX_AGE_SEC",
+        "\n",
+        "fallback maximum-age definition",
+    )
+    publisher = take_region(
+        publisher_source,
+        "static int microlink_publish_hid_fallback(void)",
+        "\nstatic void microlink_publish_hid_fallback_inactive(",
+        "microlink_publish_hid_fallback",
+    )
     license_start = source.find(" * Copyright (C)\n")
     if license_start < 0:
         raise ReplayError("could not locate upstream copyright and GPL notice")
@@ -114,15 +150,21 @@ def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
     if license_end < 0:
         raise ReplayError("could not locate end of upstream copyright and GPL notice")
     upstream_license = "/*\n" + source[license_start : license_end + len("\n */")] + "\n\n"
+    publisher_license_end = publisher_source.find("\n */")
+    if not publisher_source.startswith("/* apcmicrolink.c") or publisher_license_end < 0:
+        raise ReplayError("could not locate publisher source copyright and GPL notice")
+    publisher_license = publisher_source[: publisher_license_end + len("\n */")] + "\n\n"
 
-    unit = upstream_license + (
+    unit = upstream_license + publisher_license + (
         "/* SPDX-License-Identifier: GPL-2.0-or-later */\n"
-        f"/* Exact upstream excerpts from NUT {revision}; replay-only TU. */\n"
+        f"/* Exact NUT {revision} excerpts; publisher/reset wrappers are test-only. */\n"
         "#include <stddef.h>\n"
         "#include <stdint.h>\n"
         "#include <time.h>\n"
         "#include <math.h>\n\n"
         "/* microlink_now is provided by the controlled test clock. */\n\n"
+        + report_id_declarations
+        + "\n"
         + declarations
         + "\n"
         + extract_bits
@@ -130,6 +172,13 @@ def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
         + decode_fallback
         + "\n"
         + get_fallback
+        + "\n/* Test-only wrapper around the exact callback reset statements. */\n"
+        + "static void replay_reset_fallback_state(void)\n{\n"
+        + reset_block
+        + "}\n\n"
+        + age_macro
+        + "\n"
+        + publisher
     )
 
     forbidden = (
@@ -147,6 +196,8 @@ def extract_translation_unit(source_bytes: bytes, revision: str) -> str:
         "static unsigned long hid_extract_bits(",
         "static void microlink_usb_try_decode_fallback(",
         "int microlink_usb_get_hid_fallback(",
+        "static void replay_reset_fallback_state(void)",
+        "static int microlink_publish_hid_fallback(void)",
     )
     if any(unit.count(symbol) != 1 for symbol in expected_symbols):
         raise ReplayError("extracted translation unit does not contain the exact expected functions")
@@ -167,7 +218,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        label, _source_file, source_bytes = verify_source(
+        label, source_files = verify_source(
             args.source_root, args.expected_revision
         )
         repository_root = Path(__file__).resolve().parents[2]
@@ -191,7 +242,7 @@ def main() -> int:
         variant_dir = scratch_root / label
         variant_dir.mkdir(parents=True, exist_ok=False)
         generated_path = variant_dir / GENERATED_NAME
-        generated_unit = extract_translation_unit(source_bytes, args.expected_revision)
+        generated_unit = extract_translation_unit(source_files, args.expected_revision)
         with generated_path.open("x", encoding="utf-8") as generated_file:
             generated_file.write(generated_unit)
         print(f"extracted exact {label} fallback source to {generated_path}")
@@ -208,6 +259,7 @@ def main() -> int:
             "-Wall",
             "-Wextra",
             "-Werror",
+            "-DWITH_USB=1",
             "-DWITH_LIBUSB_1_0=0",
             f"-DREPLAY_EXPECT_FIX={is_fix}",
             "-I",

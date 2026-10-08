@@ -11,8 +11,8 @@ qualification artifacts, not an installed service or a production backend.
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
 | `test_guarded_source_paths.py` | Static regression checks on selected patched NUT call sites; never runs a driver |
-| `replay_hid_fallback.py` and `test_hid_fallback_replay.c` | Offline extraction/replay of hash-pinned upstream fallback functions, not a full driver |
-| `test_replay_hid_fallback.py` | Synthetic source-fence checks; no compiler or hardware |
+| `replay_hid_fallback.py` and `test_hid_fallback_replay.c` | Offline extraction of hash-pinned fallback and publication mapper, plus a test-only reset wrapper; recording stubs, not a full driver |
+| `test_replay_hid_fallback.py` | Seven synthetic source-fence checks; no compiler or hardware |
 | `process_deadline.py` | Offline qualification helper: bounded child process, private output, no automatic driver launch |
 | `test_process_deadline*.py` | Synthetic subprocess and lifecycle regressions; never execute a UPS driver |
 
@@ -23,6 +23,9 @@ Also review the [open upstream issues](../../docs/NUT_UPSTREAM_STATUS.md): the
 guarded profile does not repair the upstream HID fallback-status defect.
 The separate [HID fallback replay](../../docs/NUT_HID_REPLAY.md) compares the
 base with the open upstream correction; it does not integrate that correction.
+The coordinating reviewer compiled, inspected and ran both expanded C replays.
+The expected comparisons passed; known residuals remain. Recorded status calls
+do not emulate final NUT dstate inference.
 No test here demonstrates physical UPS compatibility, USB coexistence, or
 correct electrical measurements.
 
