@@ -41,5 +41,7 @@ The default ad-hoc build has no App Group configured. Real shared-container
 access, notification presentation and runtime egress are still unverified.
 The app exports only modeled values; upstream raw errors are redacted in
 user-facing failures. Do not attach raw hardware dumps or private build logs
-to public issues. Apple's platform privacy-manifest requirements and final
-distribution artifacts still need a release-specific review.
+to public issues. The [macOS privacy declarations](docs/PRIVACY_MANIFEST.md)
+record no tracking or developer data collection; they do not prove runtime
+egress behavior. Final distribution artifacts still need a release-specific
+review.

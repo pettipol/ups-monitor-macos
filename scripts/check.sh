@@ -55,6 +55,7 @@ printf 'Python: %s\n' "$PYTHON_OUTPUT"
 
 require_command plutil
 require_command codesign
+require_command mktemp
 
 optional_count=0
 if [ "${UPS_TEST_UPSC+x}" = "x" ]; then optional_count=$((optional_count + 1)); fi
@@ -92,6 +93,10 @@ printf '\n== Python synthetic process tests ==\n'
 printf '\n== Offline replay source-fence tests ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_fallback.py' -v
 
+printf '\n== Privacy declaration and packaging regressions ==\n'
+"$PYTHON_BIN" -m unittest discover -s scripts -p 'test_privacy_manifest.py' -v
+"$PYTHON_BIN" "$SCRIPT_DIR/check_privacy_manifest.py" --source-root "$ROOT"
+
 printf '\n== Swift package tests ==\n'
 swift test
 
@@ -101,14 +106,15 @@ swift build -c release
 printf '\n== Plist and entitlement syntax ==\n'
 plutil -lint \
     UPSMonitor.xcodeproj/project.pbxproj \
-    App/Info.plist App/Shared.entitlements \
-    Widget/Info.plist Widget/Local.entitlements Widget/Shared.entitlements
+    App/Info.plist App/Shared.entitlements App/PrivacyInfo.xcprivacy \
+    Widget/Info.plist Widget/Local.entitlements Widget/Shared.entitlements Widget/PrivacyInfo.xcprivacy
 bash "$SCRIPT_DIR/check-version.sh"
 printf '\n== Version metadata regression tests ==\n'
 bash "$SCRIPT_DIR/test-versioning.sh"
 
 printf '\n== Ad-hoc Xcode Release build ==\n'
-DERIVED_DATA="$ROOT/.build/validation-app"
+DERIVED_DATA="$(mktemp -d "$ROOT/.build/validation-app.XXXXXX")"
+printf 'Fresh Xcode validation directory: %s\n' "$DERIVED_DATA"
 xcodebuild \
     -project UPSMonitor.xcodeproj \
     -scheme UPSMonitor \
@@ -124,6 +130,9 @@ xcodebuild \
 
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Release/UPS Monitor.app"
 [ -d "$APP_BUNDLE" ] || fail "Xcode Release app bundle was not produced."
+printf '\n== Built app and widget privacy manifests ==\n'
+"$PYTHON_BIN" "$SCRIPT_DIR/check_privacy_manifest.py" \
+    --source-root "$ROOT" --app-bundle "$APP_BUNDLE"
 printf '\n== Ad-hoc signature verification ==\n'
 codesign --verify --deep --strict "$APP_BUNDLE"
 printf 'Ad-hoc app signature verified.\n'

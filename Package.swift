@@ -34,7 +34,7 @@ let package = Package(
         .target(name: "UPSWidgetUI", dependencies: ["UPSWidgetData", "UPSModel", "UPSMonitorUI"]),
         .target(name: "UPSWidgetBridge", dependencies: ["UPSWidgetData", "UPSModel"], linkerSettings: [.linkedFramework("Security")]),
         .target(name: "UPSAppHost", dependencies: ["ApplePowerSource", "UPSHistory", "UPSModel", "UPSMonitorUI", "UPSRuntime", "UPSWidgetData", "UPSWidgetBridge", "NUTClient", "UPSEnergy"],
-                path: "App", exclude: ["Info.plist", "UPSMonitorApp.swift", "Shared.entitlements"]),
+                path: "App", exclude: ["Info.plist", "PrivacyInfo.xcprivacy", "UPSMonitorApp.swift", "Shared.entitlements"]),
         .executableTarget(name: "UPSProbe", dependencies: ["UPSCore", "ApplePowerSource", "UPSRuntime", "UPSModel"]),
         .executableTarget(name: "UPSRenderProbe", dependencies: ["UPSModel", "UPSEnergy", "UPSMonitorUI", "UPSWidgetData", "UPSWidgetUI"],
                           linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("ImageIO")]),

@@ -26,19 +26,25 @@ stops at a fake test marker, without starting the full validation sequence.
 
 The script runs, in order:
 
-1. Python standard-library tests under `backend/nut` matching
-   `test_process_deadline*.py`.
+1. Python standard-library process and offline replay source-fence tests under
+   `backend/nut`, plus privacy-declaration regressions and source plist checks
+   under `scripts`.
 2. The complete Swift package test suite with `swift test`.
 3. A Swift release build with `swift build -c release`.
-4. `plutil -lint` over the Xcode project, app/widget plists and entitlements.
-5. An Xcode Release build in `.build/validation-app`, with ad-hoc identity and
+4. `plutil -lint` over the Xcode project, app/widget plists, privacy manifests
+   and entitlements, then source-version metadata checks and regressions.
+5. An Xcode Release build in a new `.build/validation-app.XXXXXX` directory,
+   with ad-hoc identity and
    empty `DEVELOPMENT_TEAM` and `UPS_APP_GROUP_ID`.
-6. Deep/strict signature verification of the resulting local app bundle.
+6. Verification of both packaged privacy manifests, then deep/strict signature
+   verification of the resulting local app bundle.
 
 The Xcode step does not use the Shared signing configurations or an App Group.
 It does not launch the app, widget, native probe, or UPS driver. Build output is
-kept under `.build/validation-app`; the script never runs a clean or recursively
-deletes build data.
+kept in the newly allocated directory printed by the script; it never runs a
+clean or recursively deletes earlier build data. The separate SwiftPM steps
+can still use their incremental cache. Fresh Xcode output and explicit embedded
+manifest checks avoid accepting a stale packaged extension as release evidence.
 
 ## Optional NUT Client Interop
 

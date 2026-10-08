@@ -114,6 +114,9 @@ permission prompt, process execution, hardware access, network capture, egress
 test, signing, or App Group runtime verification was performed. Source review
 cannot establish operating-system privacy behavior, backup state, third-party
 executable behavior, full dependency behavior, or absence of all data flows.
-No `PrivacyInfo.xcprivacy` file was found in the inspected repository tree;
-Apple privacy-manifest compliance remains **OPEN**. This report is not a legal
-assessment, comprehensive security review, or publication approval.
+At the original audit snapshot no `PrivacyInfo.xcprivacy` file was present.
+A subsequent same-day [platform-specific review](PRIVACY_MANIFEST.md) adds
+local-data declarations to the app and widget and source/bundle checks. It does
+not turn this earlier static audit into runtime evidence or establish Apple
+distribution acceptance. This report is not a legal assessment, comprehensive
+security review, or publication approval.

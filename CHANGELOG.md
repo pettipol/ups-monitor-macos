@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added minimal macOS app/widget privacy declarations and checks of source and
+  built-bundle placement. The platform-specific review distinguishes local
+  storage from developer data collection and does not invent required-reason
+  API declarations for native macOS or claim Apple distribution approval.
 - Extended the offline NUT fallback replay to the exact publisher and a
   test-only wrapper around callback reset statements, with two-file source
   hashes and seven source-fence tests. It checks synthetic status emissions
