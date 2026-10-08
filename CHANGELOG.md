@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-Changes for a later version will be recorded here.
+- Hardened the offline guarded NUT source prototype: effective foreground dump
+  mode only, no sibling-driver stop/signaling path, and no interrupt PIPE
+  clear-halt recovery. Added policy and static call-site regressions; no driver
+  or hardware execution.
+- Documented open upstream USB recovery and HID fallback-status issues. The
+  guarded patch does not fix the fallback defect or qualify UPS measurements.
+- Recorded an authorized local Apple Development app/widget build and verified
+  matching signed group entitlements. Runtime shared access and installed
+  widget behavior remain open; no personal signing identifiers are included.
 
 ## [0.1.0-preview.1] - Source preview
 

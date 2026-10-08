@@ -1,7 +1,7 @@
 # Experimental GPL-covered source patch. Not application MIT code.
 # Network UPS Tools base commit: 1a8369f8688443a500527059167d2f66ca27535f
 # Provenance: Network UPS Tools, GPL-2.0-or-later per source headers.
-# Offline prototype; no UPS, USB interface, or driver was exercised.
+# Offline prototype; no UPS or USB interface was opened and no driver was run.
 
 diff --git a/drivers/Makefile.am b/drivers/Makefile.am
 index 4a3cc00b0..8f63e5928 100644
@@ -359,7 +359,7 @@ index 1ef6e8f0b..cfe7c9965 100644
  	ret = instcmd("shutdown.return", NULL);
  	if (ret != STAT_INSTCMD_HANDLED) {
 diff --git a/drivers/libusb1.c b/drivers/libusb1.c
-index 65266c268..cd5da57f1 100644
+index 65266c268..67dbf3719 100644
 --- a/drivers/libusb1.c
 +++ b/drivers/libusb1.c
 @@ -41,6 +41,10 @@
@@ -574,27 +574,83 @@ index 65266c268..cd5da57f1 100644
  			if (ret == LIBUSB_ERROR_BUSY && testvar("allow_duplicates")) {
  				upsdebugx(2, "Configured to allow_duplicates so looking for another similar device");
  				goto next_device;
+@@ -1209,8 +1324,11 @@ static int nut_libusb_get_interrupt(
+ 		LIBUSB_ENDPOINT_IN + usb_subdriver.hid_ep_in,
+ 		(unsigned char *)buf, tmpbufsize, &tmpbufsize, timeout);
+ 
+-	/* Clear stall condition */
++	/* Clear stalls only in the default profile; guarded mode fails closed. */
+ 	if (ret == LIBUSB_ERROR_PIPE) {
++		if (nut_libusb_guarded_monitor()) {
++			return ret;
++		}
+ 		ret = libusb_clear_halt(udev, 0x81);
+ 	}
+ 
 diff --git a/drivers/main.c b/drivers/main.c
-index 3fe29e217..0151c3858 100644
+index 3fe29e217..2c204f921 100644
 --- a/drivers/main.c
 +++ b/drivers/main.c
-@@ -2746,6 +2746,10 @@ int main(int argc, char **argv)
- 	}
- # endif	/* !WIN32 */
+@@ -28,6 +28,7 @@
+ #include "dstate.h"
+ #include "attribute.h"
+ #include "upsdrvquery.h"
++#include "nut-guarded-policy.h"
  
-+	if (do_forceshutdown && testvar("guarded_monitor")) {
-+		fatalx(EXIT_FAILURE, "guarded_monitor refuses -k before contacting another driver instance");
+ #ifndef WIN32
+ # include <grp.h>
+@@ -2366,6 +2367,7 @@ int main(int argc, char **argv)
+ # ifndef WIN32
+ 	int	cmd = 0;
+ 	pid_t	oldpid = -1;
++	int	oldpid_specified = 0;
+ 	int	background_pipefd[2];
+ # else	/* WIN32 */
+ /* FIXME NUT_WIN32_INCOMPLETE : *actually* handle WIN32 builds too */
+@@ -2603,6 +2605,7 @@ int main(int argc, char **argv)
+ # ifndef WIN32
+ 			/* NOTE for FIXME above: PID-signalling is non-WIN32-only for us */
+ 			case 'P':
++				oldpid_specified = 1;
+ 				if ((oldpid = parsepid(optarg)) < 0)
+ 					help_msg();
+ 				break;
+@@ -2699,6 +2702,20 @@ int main(int argc, char **argv)
+ 		fatalx(EXIT_FAILURE,
+ 			"Error: specifying '-a id' or '-s id' is now mandatory. Try -h for help.");
+ 	}
++
++	if (testvar("guarded_monitor")) {
++# ifdef WIN32
++		fatalx(EXIT_FAILURE,
++			"guarded_monitor is unsupported on Windows because process signaling cannot be excluded");
++# else
++		if (!nut_guard_allows_dump_mode(dump_data, foreground, cmd != 0,
++			do_forceshutdown, oldpid_specified)) {
++			fatalx(EXIT_FAILURE,
++				"guarded_monitor requires positive dump count in foreground and no -c, -k, or -P options");
++		}
++# endif	/* WIN32 */
 +	}
 +
- 	if (do_forceshutdown) {
- 		/* First try to handle this over socket protocol
- 		 * with the running older driver instance (if any);
+ 	upsdrv_setproctag(upsname);
+ 
+ 	/* we need to get the port from somewhere, unless we are just sending a signal and exiting */
+@@ -2880,7 +2897,7 @@ int main(int argc, char **argv)
+ 
+ 	/* Make sure we have no competitors (note that systemd or SMF might
+ 	 * revive them and kill us later, though) */
+-	if (!cmd || do_forceshutdown) {
++	if (!testvar("guarded_monitor") && (!cmd || do_forceshutdown)) {
+ 		ssize_t	cmdret = -1;
+ 		char	buf[LARGEBUF];
+ 		struct timeval	tv;
 diff --git a/drivers/nut-guarded-policy.h b/drivers/nut-guarded-policy.h
 new file mode 100644
-index 000000000..af5a71665
+index 000000000..1e102bb14
 --- /dev/null
 +++ b/drivers/nut-guarded-policy.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,93 @@
 +/* SPDX-License-Identifier: GPL-2.0-or-later
 + * Experimental Network UPS Tools source helper, not application MIT code. */
 +#ifndef NUT_GUARDED_POLICY_H
@@ -660,6 +716,13 @@ index 000000000..af5a71665
 +static inline int nut_guard_allows_control(int guarded)
 +{
 +	return !guarded;
++}
++
++static inline int nut_guard_allows_dump_mode(int dump_count, int foreground,
++	int command_requested, int force_shutdown, int oldpid_specified)
++{
++	return dump_count > 0 && foreground == 1 && !command_requested
++		&& !force_shutdown && !oldpid_specified;
 +}
 +
 +static inline void nut_guard_maybe_reset(int guarded,

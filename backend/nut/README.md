@@ -10,12 +10,15 @@ qualification artifacts, not an installed service or a production backend.
 | `nut-guarded-monitor.patch` | Experimental opt-in apcmicrolink USB restrictions; hardware untested |
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
+| `test_guarded_source_paths.py` | Static regression checks on selected patched NUT call sites; never runs a driver |
 | `process_deadline.py` | Offline qualification helper: bounded child process, private output, no automatic driver launch |
 | `test_process_deadline*.py` | Synthetic subprocess and lifecycle regressions; never execute a UPS driver |
 
 The two patches affect disjoint files and apply to the pristine base revision.
 Read [client evidence](../../docs/NUT_CLIENT_COMPLETION.md) and
 [driver limitations](../../docs/NUT_GUARDS.md) before interpreting test results.
+Also review the [open upstream issues](../../docs/NUT_UPSTREAM_STATUS.md): the
+guarded profile does not repair the upstream HID fallback-status defect.
 No test here demonstrates physical UPS compatibility, USB coexistence, or
 correct electrical measurements.
 

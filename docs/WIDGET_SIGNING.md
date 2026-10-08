@@ -5,7 +5,7 @@
 | Configuration | Signing | App Group | Purpose |
 |---|---|---|---|
 | Debug / Release | Ad hoc | None | Local source build; widget explicitly unconfigured |
-| SharedDebug / SharedRelease | Developer-supplied Apple Development identity | Developer-team-prefixed group by default | Future local shared-container qualification |
+| SharedDebug / SharedRelease | Developer-supplied Apple Development identity | Developer-team-prefixed group by default | Local signed build; shared-container runtime qualification remains open |
 
 The Xcode app target embeds `UPSMonitorWidget.appex`. Both use the same explicit
 `UPS_APP_GROUP_ID` build setting in their Info.plist. Only Shared configurations
@@ -35,9 +35,11 @@ xcodebuild -project UPSMonitor.xcodeproj -scheme UPSMonitor \
 
 Do not copy another developer's team identifier. Do not check personal signing
 identities, provisioning profiles, credentials or container paths into Git.
-This command has not been run with a personal identity in this qualification.
-It does not perform online group registration or provisioning updates. The
-[Apple App Group entitlement documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.application-groups)
+A SharedRelease build was performed with an explicitly authorized existing local
+Apple Development identity and dedicated team-prefixed group on 2026-10-08.
+The build used manual signing, an explicit local identity and no provisioning
+update flag. No keys were exported and no online group registration was performed.
+The [Apple App Group entitlement documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.application-groups)
 describes the team-prefixed macOS format; it does not establish that a particular
 local identity or container will work.
 
@@ -66,7 +68,15 @@ See [Apple's refresh guidance](https://developer.apple.com/documentation/widgetk
 
 - Release app and embedded widget compile as arm64/x86_64; ad-hoc nested signature
   verifies. The Release widget has sandbox enabled, no App Group and no
-  `get-task-allow` entitlement. No personal certificate used.
+  `get-task-allow` entitlement. This ad-hoc configuration uses no personal certificate.
+- A separate SharedRelease app and embedded widget passed deep/strict signature
+  verification using the authorized local Apple Development identity. The host
+  and extension carry the same dedicated App Group entitlement; the extension
+  also carries its sandbox entitlement, without USB, network-client or debugger
+  entitlements. Personal identity and group values are not repository content.
+- The signed extension path appears in the local plug-in registry alongside
+  earlier build copies with the same bundle identifier. This proves a registry
+  entry, not which copy WidgetKit chooses or that its container is accessible.
 - Shared-file tests cover validation, subsecond timestamps, atomic replacement,
   bounded reads, unsafe files/directories and failure preservation. Publisher
   tests cover request limits and concurrent out-of-order submissions.
@@ -74,10 +84,10 @@ See [Apple's refresh guidance](https://developer.apple.com/documentation/widgetk
   publish stopped state, and keep preview data out of the shared file.
 - Pure view/formatter tests are not screenshots or proof of layout in WidgetKit.
 
-Still required: actual signed group access from both processes; extension
-registration; placement and rendering of small/medium widgets; user interaction;
-updates while the host runs/stops; light/dark and accessibility; and source
-selection/disconnection behavior. No bundle from this widget tranche has been
-launched or explicitly installed/registered. Never disable Gatekeeper, change
-existing group permissions or use a shared temporary-file workaround to clear
-these gates.
+Still required: actual signed group access from both processes; selection of the
+intended registered extension; placement and rendering of small/medium widgets;
+user interaction; updates while the host runs/stops; light/dark and accessibility; and source
+selection/disconnection behavior. The personally signed bundle has not yet been
+launched; no explicit plug-in registration command was used. Never disable
+Gatekeeper, change existing group permissions or use a shared temporary-file
+workaround to clear these gates.

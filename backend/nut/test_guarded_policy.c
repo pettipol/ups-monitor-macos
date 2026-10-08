@@ -101,6 +101,15 @@ int main(void)
 	assert(f.resets == 1);
 	assert(!nut_guard_allows_control(1));
 	assert(nut_guard_allows_control(0));
+	assert(nut_guard_allows_dump_mode(1, 1, 0, 0, 0));
+	assert(nut_guard_allows_dump_mode(2, 1, 0, 0, 0));
+	assert(!nut_guard_allows_dump_mode(0, 1, 0, 0, 0));
+	assert(!nut_guard_allows_dump_mode(-1, 1, 0, 0, 0));
+	assert(!nut_guard_allows_dump_mode(1, 0, 0, 0, 0));
+	assert(!nut_guard_allows_dump_mode(1, 2, 0, 0, 0));
+	assert(!nut_guard_allows_dump_mode(1, 1, 1, 0, 0));
+	assert(!nut_guard_allows_dump_mode(1, 1, 0, 1, 0));
+	assert(!nut_guard_allows_dump_mode(1, 1, 0, 0, 1));
 
 	/* Each synthetic frame advances the fake clock; frames cannot renew it. */
 	for (i = 0; i < 100; i++) {
