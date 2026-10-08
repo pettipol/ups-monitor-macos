@@ -13,6 +13,7 @@ tests and unqualified behavior. It does not promise support beyond the evidence.
 | Experimental `apcmicrolink` driver | Pinned experimental NUT source and guarded patch reviewed/built offline | Hardware and USB behavior `NOT RUN`; not part of the app bundle, not a read-only path, not authorized for routine use |
 | NUT stable 2.8.5 | Dependency baseline records that this version does not contain `apcmicrolink` | Does not imply compatibility for other NUT devices or drivers |
 | Widget extension | Source builds; WidgetKit data/bridge implementations have synthetic tests | App Group signing/access, installed widget rendering and refresh behavior remain unqualified |
+| Offscreen visual probe | Eight synthetic widget/menu/energy component canvases rendered locally with ImageRenderer | Partial raster review only. Progress controls are placeholders; the ordinary/accessibility-requested pair was pixel-identical. No installed widget, enlarged-text or VoiceOver qualification |
 | Energy estimates | Synthetic active-watt integration and app-host tests passed in the 231-test local Swift suite | No live watt source, real-UPS energy result, meter comparison, rendered energy UI or accuracy claim has been qualified |
 
 The qualitative one-read capability record is in

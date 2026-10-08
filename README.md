@@ -63,6 +63,10 @@ For the pinned synthetic tests and build sequence, see
 bash scripts/check.sh
 ```
 
+For a bounded, synthetic offscreen visual check, see the
+[render probe](docs/RENDER_PROBE.md). Its images are not installed-widget or
+interactive-app evidence; native controls may be renderer placeholders.
+
 ```sh
 swift test
 swift run ups-probe

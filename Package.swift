@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "UPSWidgetUI", targets: ["UPSWidgetUI"]),
         .library(name: "UPSWidgetBridge", targets: ["UPSWidgetBridge"]),
         .executable(name: "ups-probe", targets: ["UPSProbe"]),
+        .executable(name: "ups-render-probe", targets: ["UPSRenderProbe"]),
     ],
     targets: [
         .target(name: "UPSCore"),
@@ -35,6 +36,8 @@ let package = Package(
         .target(name: "UPSAppHost", dependencies: ["ApplePowerSource", "UPSHistory", "UPSModel", "UPSMonitorUI", "UPSRuntime", "UPSWidgetData", "UPSWidgetBridge", "NUTClient", "UPSEnergy"],
                 path: "App", exclude: ["Info.plist", "UPSMonitorApp.swift", "Shared.entitlements"]),
         .executableTarget(name: "UPSProbe", dependencies: ["UPSCore", "ApplePowerSource", "UPSRuntime", "UPSModel"]),
+        .executableTarget(name: "UPSRenderProbe", dependencies: ["UPSModel", "UPSEnergy", "UPSMonitorUI", "UPSWidgetData", "UPSWidgetUI"],
+                          linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("ImageIO")]),
         .testTarget(name: "UPSCoreTests", dependencies: ["UPSCore"]),
         .testTarget(name: "UPSEnergyTests", dependencies: ["UPSEnergy", "UPSModel"]),
         .testTarget(name: "ApplePowerSourceTests", dependencies: ["ApplePowerSource", "UPSCore"]),
