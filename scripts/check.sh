@@ -89,6 +89,9 @@ fi
 printf '\n== Python synthetic process tests ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_process_deadline*.py' -v
 
+printf '\n== Offline replay source-fence tests ==\n'
+"$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_fallback.py' -v
+
 printf '\n== Swift package tests ==\n'
 swift test
 

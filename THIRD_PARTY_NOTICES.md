@@ -10,6 +10,8 @@ This inventory reflects the repository and build configuration reviewed on
 | Original UPS Monitor Mac source and documentation | MIT, as stated in [`LICENSE`](LICENSE). The notice does not relicense identified third-party material. |
 | `backend/nut/nut-guarded-monitor.patch` and `test_guarded_policy.c` | GPL-2.0-or-later, following the affected NUT source headers; the C test carries its own SPDX identifier. |
 | `backend/nut/nut-upsc-completion.patch` | GPL-2.0-or-later based on upstream `clients/upsc.c` and `clients/upsclient.c` headers. It is an unsubmitted patch against NUT, not an application MIT file. |
+| `backend/nut/test_hid_fallback_replay.c` and generated NUT excerpts | GPL-2.0-or-later; generated excerpts retain upstream copyright and GPL notices. Exact source revisions/digests are in the replay runner; generated files are external, not bundled. |
+| `backend/nut/replay_hid_fallback.py` and `test_replay_hid_fallback.py` | Original MIT-licensed offline source extraction and synthetic source-fence helpers. |
 | `backend/nut/LICENSE-GPL2` | Complete GPL version 2 text copied from the pinned NUT source checkout; byte hash is recorded below. |
 | `backend/nut/check_upsc_completion.py`, `process_deadline.py` and their Python tests | Identified by `backend/nut/README.md` as original project/MIT helpers; they use synthetic fixtures and are not the app's NUT driver. |
 | NUT source and `libusb` | Built only in an external workbench for offline qualification. Neither the NUT source tree, libusb, nor their compiled binaries are included in this application repository or current app bundle. |
@@ -24,7 +26,7 @@ licensing overview: it says most NUT files are GPL-2.0-or-later and describes
 other license families present in the full upstream tree. It is not itself
 the complete GPL text; the applicable GPL version 2 text for the identified
 patches is included as `backend/nut/LICENSE-GPL2`. This repository contains
-the two patches and guarded C test, not the entire upstream NUT tree. The
+the two patches and C tests, not the entire upstream NUT tree. The
 patches are not submitted or accepted upstream. No NUT or libusb binary is
 currently distributed here.
 
@@ -43,7 +45,7 @@ source headers; this notice makes no independent legal determination.
 
 - Confirm applicable notices and source obligations for any future distribution
   that includes NUT binaries or a larger upstream source set. The current
-  repository contains patches and a test, not the complete upstream tree.
+  repository contains patches and tests, not the complete upstream tree.
 - `nut-upsc-completion.patch` has no SPDX/provenance header of its own. Its
   adjacent README now identifies the pinned source files, copyright names
   observed in their headers and GPL terms. Whether to add metadata to the patch

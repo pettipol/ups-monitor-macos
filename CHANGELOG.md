@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added an offline, source-hash-fenced replay of the upstream HID fallback
+  decoder/getter, comparing the pinned base and proposed correction. Synthetic
+  source-fence tests run in normal validation; the C replay is a separate local
+  qualification, not a driver execution or an integrated upstream fix.
 - Hardened the offline guarded NUT source prototype: effective foreground dump
   mode only, no sibling-driver stop/signaling path, and no interrupt PIPE
   clear-halt recovery. Added policy and static call-site regressions; no driver

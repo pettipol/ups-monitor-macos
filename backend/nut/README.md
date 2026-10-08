@@ -11,6 +11,8 @@ qualification artifacts, not an installed service or a production backend.
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
 | `test_guarded_source_paths.py` | Static regression checks on selected patched NUT call sites; never runs a driver |
+| `replay_hid_fallback.py` and `test_hid_fallback_replay.c` | Offline extraction/replay of hash-pinned upstream fallback functions, not a full driver |
+| `test_replay_hid_fallback.py` | Synthetic source-fence checks; no compiler or hardware |
 | `process_deadline.py` | Offline qualification helper: bounded child process, private output, no automatic driver launch |
 | `test_process_deadline*.py` | Synthetic subprocess and lifecycle regressions; never execute a UPS driver |
 
@@ -19,6 +21,8 @@ Read [client evidence](../../docs/NUT_CLIENT_COMPLETION.md) and
 [driver limitations](../../docs/NUT_GUARDS.md) before interpreting test results.
 Also review the [open upstream issues](../../docs/NUT_UPSTREAM_STATUS.md): the
 guarded profile does not repair the upstream HID fallback-status defect.
+The separate [HID fallback replay](../../docs/NUT_HID_REPLAY.md) compares the
+base with the open upstream correction; it does not integrate that correction.
 No test here demonstrates physical UPS compatibility, USB coexistence, or
 correct electrical measurements.
 
@@ -35,6 +39,9 @@ The two patch files are derived from NUT source at
 **GPL-2.0-or-later** according to the affected upstream source headers. The
 guarded C test is marked `GPL-2.0-or-later` in its own SPDX header. None of
 these artifacts is relicensed by the application's MIT license.
+The HID fallback C replay test is also GPL-2.0-or-later. Its generated upstream
+fragments preserve the source copyright/GPL notice and are not checked in.
+The original Python replay runner and source-fence tests are MIT licensed.
 
 The completion patch changes `clients/upsc.c` and `clients/upsclient.c`.
 Their upstream headers list Russell Kroll (1999 in `upsc.c`; 2002 in

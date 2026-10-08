@@ -27,6 +27,25 @@ as an isolated, merged, or qualified fix. The reviewed master still matched
 Our guarded patch does **not** correct this fallback-status defect. Restricting
 USB/process side effects does not make upstream measurements trustworthy.
 
+## Offline Follow-Up
+
+The exact corrective commit
+[`e0bb8ea64f7f8a140ad8908904186a05a324c295`](https://github.com/networkupstools/nut/commit/e0bb8ea64f7f8a140ad8908904186a05a324c295)
+was subsequently compared with the pinned base using an
+[offline replay of the actual decoder/getter](NUT_HID_REPLAY.md). The base
+published incomplete or stale status in the synthetic scenarios; the proposed
+correction withheld those snapshots. Two residual behaviors reproduced in
+both revisions: a matching report ID with no status payload can refresh zero
+values, and a backward wall-clock step can make old values appear fresh.
+No claim is made that either input occurs on a particular UPS. The full
+driver, descriptor parser, threading and caller-to-`OL`/`OB` path were excluded.
+
+The isolated correction also passed a textual `git apply --check` against the
+pinned base. Its stacked ancestry alone does not establish a code dependency
+on #3714; conversely, textual applicability and a fragment replay do not
+qualify an integrated backport. The guarded patch remains unchanged. These
+results support further upstream review, not hardware testing or release.
+
 ## Qualification Boundary
 
 An existing [SMC1500I USB report in #1426](https://github.com/networkupstools/nut/issues/1426)
