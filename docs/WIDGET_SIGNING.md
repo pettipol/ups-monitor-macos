@@ -244,3 +244,17 @@ Apple's underlying callback operation. A system callback that never arrives
 has no guaranteed deadline; the sheet can still be closed. The full local
 Swift suite passed 246 tests, with two optional synthetic-client interop tests
 skipped. These tests never invoke WidgetKit's real configuration query.
+
+### User-Added Medium Widget
+
+Later on 2026-10-11, the user reported adding the production widget to the
+desktop. A new real **View > Widget status** query returned **Small: 0,
+Medium: 1, Other sizes: 0**. The configuration sheet was visually inspected
+and closed normally; the Apple host remained active with history recording off.
+No registry correction, new build, driver launch or USB operation was needed.
+
+This establishes one matching configured medium widget, not its rendered
+contents. The UI capture tool exposed a different desktop widget, so direct
+inspection of the UPS widget and successful extension-side shared-data reading
+remain **OPEN**. A cropped screenshot or a transcription from the user was
+requested. There is no claim of observed live widget values or update timing.

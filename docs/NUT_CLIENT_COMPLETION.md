@@ -98,12 +98,36 @@ swift test --filter UPSCInteropTests
 ```
 
 The digest identifies the exact already-qualified executable; computing a hash
-does not establish trust in an arbitrary binary. The runtime-reader interop
-test requires all three variables; the direct-client test uses the two paths.
-Without the required explicit variables the respective integration test is skipped;
-ordinary unit tests must not discover or connect to an installed NUT service.
+does not establish trust in an arbitrary binary. Both interop tests require all
+three variables: `UPS_TEST_UPSC`, `UPS_TEST_UPSC_SHA256`, and `UPS_TEST_PYTHON`.
+With all three unset, both tests are skipped. A partial or invalid configuration
+fails preflight before either test starts its synthetic fixture. Ordinary unit
+tests must not discover or connect to an installed NUT service.
 An initial test failure was caused by the fixture waiting for 32 startup bytes
 when only a port line was sent. The corrected bounded newline handshake plus
 fixture watchdog removed that harness error; no production security relaxation
 was needed. TLS, real-server authentication, production packaging and actual
 UPS compatibility remain outside this synthetic qualification.
+
+## Refresh Qualification: 2026-10-11
+
+`swift test --jobs 2 --filter UPSCInteropTests` passed both opt-in test methods:
+two tests, zero failures, independently repeated with the same result. Together
+they exercised seven fixture runs per invocation: one
+complete response through the runtime reader and six direct-client cases
+(complete, truncated list, server error, wrong end marker, short end marker,
+and extra end-marker argument). Each fixture bound only `127.0.0.1` on an
+ephemeral port. The direct-client cases each issued exactly one `LIST VAR
+fixture`; the adapter case allowed only `STARTTLS` and `LIST VAR fixture`.
+
+All UPS data came from synthetic protocol fixtures: on-line status, 73% charge,
+231.5 V input, 230.2 V output, 180 W, 220 VA, and an estimated runtime. The
+fixture serial sentinel was checked not to appear in the encoded application
+snapshot. These values and the serial-filter assertion are test data, not
+observations of a physical UPS.
+
+The run used Swift 6.4, Xcode 27.0, target `arm64-apple-macosx27.0.0`, and
+Python 3.14.8. No dependency update was performed. The evidence remains limited
+to the completion-hardened client and adapter against owned synthetic loopback
+fixtures; it does not qualify TLS transport, real-server authentication,
+production packaging, or compatibility with an attached UPS.
