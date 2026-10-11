@@ -39,6 +39,7 @@ struct HistoryBrowserView: View {
                         ForEach(HistoryBrowserRange.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
                     .frame(width: 260)
                     .disabled(model.isLoading)
                     Picker("Metric", selection: $model.metric) {

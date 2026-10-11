@@ -130,3 +130,24 @@ gallery placement and installed widget rendering were not verified. No explicit
 plug-in registration command was used. Never disable
 Gatekeeper, change existing group permissions or use a shared temporary-file
 workaround to clear these gates.
+
+## Production Qualification Evidence (2026-10-11)
+
+A production `SharedRelease` build was made from source revision
+`0969b6cced759aa5bb80fe7d1e4fd9126d209f31` in a private qualification directory.
+It reused the previously authorized local Apple Development identity and
+dedicated App Group, with manual signing, no provisioning update request, and
+`UPS_WIDGET_FIXTURE_MODE=NO` explicitly set. Both built Info.plists contain
+`NO`; the app and extension carry the same team-prefixed App Group entitlement.
+Deep/strict signature verification and the repository privacy-manifest checker
+passed. No signing material or personal identifiers are recorded here.
+
+The production host was opened and observed using the Apple backend. It showed
+one UPS source with fresh online data and no sharing error; history was off and
+the session alert switch was off. This does not prove the extension
+can read the shared container. Widget gallery automation could not inspect the
+gallery because accessibility attempts returned `illegalArgument` and
+`noWindowsAvailable`. No installed widget placement, extension selection,
+rendering, interaction, refresh behavior, appearance or accessibility result was
+verified. No claim that the widget was running or that the product release gates
+passed follows from this observation.

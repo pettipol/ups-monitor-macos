@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Prevented the stored-history range picker's visible title from wrapping in
+  the compact controls row; its accessibility group label remains available.
+- Recorded bounded production Apple-reader and history-export observations.
+  Installed-widget operation and advanced APC telemetry remain unqualified.
+
 ## [0.1.0-preview.1] - Source preview
 
 Date: 2026-10-08
