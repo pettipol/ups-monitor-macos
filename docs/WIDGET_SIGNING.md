@@ -258,3 +258,29 @@ contents. The UI capture tool exposed a different desktop widget, so direct
 inspection of the UPS widget and successful extension-side shared-data reading
 remain **OPEN**. A cropped screenshot or a transcription from the user was
 requested. There is no claim of observed live widget values or update timing.
+
+### Reported Values and Expanded Layout
+
+The user subsequently described a visible `UPS · Apple` widget with most
+advanced readings absent. This is a user-reported observation, not an
+independently inspected screenshot or a timed end-to-end freshness check.
+`Apple` names the data provider, not the UPS manufacturer. The current schema
+does not acquire or publish a hardware name/model; there is no local alias
+setting yet. Opaque source identity remains unchanged.
+
+The Unreleased medium view now shows charge separately from a six-cell grid:
+runtime estimate, load percentage, active W, input V, output V and apparent VA.
+The earlier medium view omitted load and both AC voltage fields even when a
+snapshot contained them. This presentation gap is fixed in source. Six view
+tests and three compact synthetic canvases cover the expanded presentation;
+see [render evidence and limits](RENDER_PROBE.md). The installed signed app and
+its configured widget have not been replaced in this tranche.
+
+This does not remove the acquisition gap. The Apple adapter has no input/output
+AC voltage, load or active/apparent power mapping. Its battery voltage is not
+mains voltage, and its runtime estimate is suppressed on AC or while charging
+in accordance with the native field's documented context. Missing fields remain
+`Not reported`, never invented zeros or estimates from nominal VA. Advanced
+readings on the target UPS remain unqualified; experimental NUT driver work is
+still on [lifecycle hold](NUT_LIFECYCLE_REVIEW.md). No driver, USB operation,
+power-loss test or hardware configuration change was performed for this update.

@@ -1,6 +1,7 @@
 # Screenshots and Visual Evidence
 
-Captured and reviewed on 2026-10-08. These are original project artifacts, not
+App captures were reviewed on 2026-10-08; the compact widget preview was added
+on 2026-10-11. These are original project artifacts, not
 marketing mockups. All displayed readings are **synthetic fixtures**, not
 measurements from a connected UPS. No installed-widget screenshot is available.
 
@@ -56,6 +57,24 @@ while the relative-date label follows the October 2026 host clock. Do not infer
 live freshness, final proportions, enlarged-text support or production behavior
 from this canvas. See [render limitations](RENDER_PROBE.md) and
 [the outstanding widget checks](WIDGET_SIGNING.md).
+
+## Compact Medium Preview (2026-10-11)
+
+![Compact medium offscreen preview, synthetic readings](images/widget-medium-compact-offscreen.png)
+
+This compact canvas is 329 x 155 points (658 x 310 pixels at scale 2), with a
+16-point inset. It shows the Unreleased expanded medium layout. The probe
+renders `UPSWidgetView` directly with SwiftUI
+`ImageRenderer` using synthetic fixtures. The coordinator visually reviewed
+the rich, partial, and large-stale variants: all six cells and the load, input,
+and output values were visible, with units and provenance and the not-reported
+or stale labels legible and no overlap observed in those three canvases.
+
+This remains an offscreen preview, not an installed widget or a WidgetKit host
+render. It does not establish VoiceOver behavior. The fixture presentation date
+is January 2027 while relative-date text follows the host clock; that mismatch
+remains a limitation. The image is a visual reference, not evidence of real UPS
+data or new hardware compatibility.
 
 ## Interactive Check: Partial
 

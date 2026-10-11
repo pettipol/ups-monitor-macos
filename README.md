@@ -26,7 +26,7 @@
 | NUT client path | Allowlisted decoding, bounded local client, and optional configured source | Synthetic loopback fixtures only. No live NUT server or UPS compatibility is claimed. The app does not install or start a driver or server. |
 | Energy estimates | Separate `inputRealPower` and `upsRealPower` channels; application-estimated Wh with coverage, gaps and provenance | Synthetic integration and host tests only. No target-UPS watt reading or real energy accuracy is qualified. Estimates remain in memory and export separately from history. |
 | Local history | Explicitly opt-in SQLite recording, bounded browsing and JSON/CSV export | Recording defaults off. Synthetic tests do not establish long-term retention behavior on a user account. |
-| Widget | A small/medium WidgetKit extension, validated snapshot data path, isolated synthetic qualification mode and on-demand configuration status | The real production status query reports one configured medium widget after manual addition. End-to-end App Group access, system-hosted appearance and refresh behavior remain unqualified; see [widget qualification](docs/WIDGET_SIGNING.md). |
+| Widget | Small/medium views; medium shows charge, runtime estimate, load, W, VA and input/output voltage when supplied | The expanded medium layout is source/offscreen-tested only. The real production status query reports one configured medium widget using the earlier layout. End-to-end App Group access, system-hosted appearance and refresh behavior remain unqualified; see [widget qualification](docs/WIDGET_SIGNING.md). |
 | Alerts | Optional, default-off session alerts for selected monitoring conditions | macOS authorization and actual banner presentation remain unqualified. Alerts are not shutdown protection. |
 
 The native service observation excluded the Mac's internal battery from monitored sources. No USB interface was opened. Readings can be missing; missing is never represented as zero. Watts (`W`), volt-amperes (`VA`) and estimated watt-hours (`Wh`) are distinct quantities, with derived values, estimates and stale captures labelled. See the [compatibility matrix](docs/COMPATIBILITY.md) and [native observation](docs/NATIVE_BASELINE.md) for the evidence boundary.
@@ -42,7 +42,7 @@ These screenshots show the macOS app running its explicit **Synthetic preview**.
   <img src="docs/images/app-power-synthetic.jpg" alt="UPS Monitor synthetic preview showing output, W, VA and partial energy estimates from fixture data, not a connected UPS" width="48%">
 </p>
 
-The [offscreen render probe](docs/RENDER_PROBE.md) is separate from these app captures; its widget canvas is not a system-hosted widget screenshot. A representative offscreen canvas and its placeholder warning are in the [visual evidence gallery](docs/SCREENSHOTS.md).
+The [offscreen render probe](docs/RENDER_PROBE.md) is separate from these app captures; its widget canvas is not a system-hosted widget screenshot. The [visual evidence gallery](docs/SCREENSHOTS.md) includes the expanded compact medium layout with synthetic values, plus the earlier canvas and its renderer-placeholder warning.
 
 ## Quickstart
 

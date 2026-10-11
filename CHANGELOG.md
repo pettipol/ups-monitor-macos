@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Expanded the medium widget to show battery charge and six distinct metrics:
+  runtime estimate, UPS load, active watts, input voltage, output voltage and
+  apparent power. Missing readings, provenance and stale status remain explicit;
+  the small widget is unchanged. This does not acquire additional hardware data.
+- Added three compact synthetic render cases and a labelled offscreen preview.
+  The expanded layout is not yet installed or qualified in the WidgetKit host.
+
 - Added an on-demand Widget status sheet using the public WidgetKit
   configuration API. Counts are restricted to the production widget kind;
   unavailable queries are distinct from zero configured widgets. Configuration

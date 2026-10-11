@@ -22,7 +22,7 @@ public struct UPSWidgetView: View {
     public var body: some View {
         Group {
             if let snapshot = UPSWidgetPresentation.snapshot(payload) {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: isMedium ? 2 : 5) {
                     if isMedium {
                         mediumContent(snapshot)
                     } else {
@@ -49,23 +49,35 @@ public struct UPSWidgetView: View {
     }
 
     private func mediumContent(_ snapshot: MonitorSnapshot) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                header(for: snapshot)
-                chargeRow(snapshot, prominent: false)
-                chargeProgress(snapshot)
-                stateLine()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(spacing: 5) {
+                    Image(systemName: UPSWidgetPresentation.symbol(payload: payload, date: date))
+                        .accessibilityHidden(true)
+                    Text(UPSWidgetPresentation.headerLabel(
+                        providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                        isSyntheticFixture: isSyntheticFixture
+                    ))
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Charge  \(UPSWidgetPresentation.chargeValue(snapshot, includeProvenance: true))")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Divider()
+            stateLine()
 
-            VStack(alignment: .leading, spacing: 4) {
-                metricRow("Runtime estimate", id: .batteryRuntime, snapshot: snapshot)
-                metricRow("Real power", id: .upsRealPower, snapshot: snapshot)
-                metricRow("Apparent power", id: .upsApparentPower, snapshot: snapshot)
+            LazyVGrid(columns: UPSWidgetPresentation.mediumGridColumns, alignment: .leading,
+                      spacing: 2) {
+                ForEach(UPSWidgetPresentation.mediumMetricIDs, id: \.self) { id in
+                    metricCell(UPSWidgetPresentation.mediumMetricTitle(id), id: id, snapshot: snapshot)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -131,18 +143,23 @@ public struct UPSWidgetView: View {
         .monospacedDigit()
     }
 
-    private func metricRow(_ title: String, id: MonitorMetricID, snapshot: MonitorSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+    private func metricCell(_ title: String, id: MonitorMetricID, snapshot: MonitorSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text(UPSWidgetPresentation.metricValue(id, in: snapshot))
-                .font(.caption.weight(.medium))
+                .font(.caption2.weight(.medium))
                 .monospacedDigit()
-                .fixedSize(horizontal: false, vertical: true)
                 .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, minHeight: 35, maxHeight: 35, alignment: .topLeading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(UPSMonitorFormatters.metricName(id))
+        .accessibilityValue(UPSWidgetPresentation.metricValue(id, in: snapshot))
     }
 
     private func emptyContent() -> some View {
@@ -165,6 +182,21 @@ public struct UPSWidgetView: View {
 }
 
 enum UPSWidgetPresentation {
+    static let mediumMetricIDs: [MonitorMetricID] = [
+        .batteryRuntime, .upsLoad, .upsRealPower,
+        .inputVoltage, .outputVoltage, .upsApparentPower,
+    ]
+    static let mediumGridColumns = Array(repeating: GridItem(.flexible(minimum: 0), alignment: .leading), count: 3)
+
+    static func mediumMetricTitle(_ id: MonitorMetricID) -> String {
+        switch id {
+        case .upsLoad: "Load"
+        case .upsRealPower: "Real power"
+        case .upsApparentPower: "Apparent power"
+        default: UPSMonitorFormatters.metricName(id)
+        }
+    }
+
     static func syntheticMarkerLabel(isSyntheticFixture: Bool) -> String? {
         isSyntheticFixture ? "Synthetic UPS" : nil
     }
@@ -224,12 +256,14 @@ enum UPSWidgetPresentation {
         snapshot.metrics.first(where: { $0.id == .batteryCharge && $0.quality == .available && $0.value?.isFinite == true })
     }
 
-    static func chargeValue(_ snapshot: MonitorSnapshot) -> String {
+    static func chargeValue(_ snapshot: MonitorSnapshot, includeProvenance: Bool = false) -> String {
         guard let metric = chargeMetric(snapshot), let value = metric.value else {
             return snapshot.metrics.first(where: { $0.id == .batteryCharge })
                 .map { UPSMonitorFormatters.qualityLabel($0.quality) } ?? "Not reported"
         }
-        return "\(number(value))%"
+        let valueLabel = "\(number(value))%"
+        guard includeProvenance else { return valueLabel }
+        return "\(valueLabel) · \(UPSMonitorFormatters.provenanceLabel(metric.provenance))"
     }
 
     static func metricValue(_ id: MonitorMetricID, in snapshot: MonitorSnapshot) -> String {

@@ -48,6 +48,39 @@ final class UPSWidgetViewTests: XCTestCase {
         XCTAssertEqual(UPSWidgetPresentation.metricValue(.batteryRuntime, in: snapshot), "33 min · Estimated")
     }
 
+    func testMediumMetricCellsKeepDistinctMetricsInRendererOrder() {
+        let snapshot = makeSnapshot(at: Date(timeIntervalSinceReferenceDate: 800_000_000),
+                                    charge: 74, includePower: true)
+
+        XCTAssertEqual(UPSWidgetPresentation.mediumMetricIDs, [
+            .batteryRuntime, .upsLoad, .upsRealPower,
+            .inputVoltage, .outputVoltage, .upsApparentPower,
+        ])
+        XCTAssertEqual(UPSWidgetPresentation.chargeValue(snapshot), "74%")
+        XCTAssertEqual(UPSWidgetPresentation.chargeValue(snapshot, includeProvenance: true), "74% · Reported")
+        XCTAssertEqual(UPSWidgetPresentation.mediumMetricTitle(.upsLoad), "Load")
+        XCTAssertEqual(UPSWidgetPresentation.mediumMetricTitle(.upsRealPower), "Real power")
+        XCTAssertEqual(UPSWidgetPresentation.mediumMetricTitle(.upsApparentPower), "Apparent power")
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.upsLoad, in: snapshot).hasPrefix("32 %"))
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.inputVoltage, in: snapshot).hasPrefix("230 V"))
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.outputVoltage, in: snapshot).hasPrefix("229 V"))
+    }
+
+    func testMediumMetricCellsKeepZeroMissingInvalidAndProvenanceDistinct() {
+        let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let snapshot = makeSnapshot(at: date, charge: 0, includePower: true,
+                                    load: 0, inputVoltage: 0, outputVoltage: nil,
+                                    invalidApparentPower: true)
+
+        XCTAssertEqual(UPSWidgetPresentation.chargeValue(snapshot), "0%")
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.upsLoad, in: snapshot).hasPrefix("0 %"))
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.upsLoad, in: snapshot).hasSuffix("Driver-derived"))
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.inputVoltage, in: snapshot).hasPrefix("0 V"))
+        XCTAssertTrue(UPSWidgetPresentation.metricValue(.inputVoltage, in: snapshot).hasSuffix("Reported"))
+        XCTAssertEqual(UPSWidgetPresentation.metricValue(.outputVoltage, in: snapshot), "Not reported")
+        XCTAssertEqual(UPSWidgetPresentation.metricValue(.upsApparentPower, in: snapshot), "Invalid reading")
+    }
+
     @MainActor
     func testViewSupportsSmallMediumAndUnavailableEntries() {
         let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
@@ -68,7 +101,9 @@ final class UPSWidgetViewTests: XCTestCase {
         XCTAssertNil(UPSWidgetPresentation.syntheticMarkerLabel(isSyntheticFixture: false))
     }
 
-    private func makeSnapshot(at date: Date, charge: Double? = 74, includePower: Bool = false) -> MonitorSnapshot {
+    private func makeSnapshot(at date: Date, charge: Double? = 74, includePower: Bool = false,
+                              load: Double = 32, inputVoltage: Double = 230, outputVoltage: Double? = 229,
+                              invalidApparentPower: Bool = false) -> MonitorSnapshot {
         var metrics = [MonitorMetric(
             id: .batteryCharge,
             value: charge,
@@ -80,10 +115,18 @@ final class UPSWidgetViewTests: XCTestCase {
             metrics.append(contentsOf: [
                 MonitorMetric(id: .batteryRuntime, value: 1_980, unit: .seconds,
                               quality: .available, provenance: .estimated),
+                MonitorMetric(id: .upsLoad, value: load, unit: .percent,
+                              quality: .available, provenance: .driverDerived),
                 MonitorMetric(id: .upsRealPower, value: 184.5, unit: .watts,
                               quality: .available, provenance: .driverDerived),
-                MonitorMetric(id: .upsApparentPower, value: 212.7, unit: .voltAmps,
-                              quality: .available, provenance: .driverDerived),
+                MonitorMetric(id: .inputVoltage, value: inputVoltage, unit: .volts,
+                              quality: .available, provenance: .reported),
+                MonitorMetric(id: .outputVoltage, value: outputVoltage, unit: .volts,
+                              quality: outputVoltage == nil ? .unavailable : .available,
+                              provenance: .reported),
+                MonitorMetric(id: .upsApparentPower, value: invalidApparentPower ? nil : 212.7,
+                              unit: .voltAmps, quality: invalidApparentPower ? .invalid : .available,
+                              provenance: .driverDerived),
             ])
         }
         return MonitorSnapshot(

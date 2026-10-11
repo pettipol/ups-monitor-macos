@@ -75,3 +75,25 @@ Assertions must cover resource ownership and exact reset/close/free/exit order,
 as well as ordinary-mode behavior. A stub that always returns promptly cannot
 qualify the blocked case. Existing scalar and observation-budget replays do
 not cover this integrated contract.
+
+## libusb Contract Check (2026-10-11)
+
+The official [libusb 1.0.30 asynchronous I/O documentation](https://libusb.sourceforge.io/api-1.0/group__libusb__asyncio.html)
+says cancellation is asynchronous; when cancellation completes, the transfer
+callback is invoked, and freeing before that completion has undefined behavior.
+The official [thread-safety caveats](https://libusb.sourceforge.io/api-1.0/libusb_caveats.html)
+also say the transfer and its buffer must not be accessed from submission until
+the completion callback; ownership is with libusb during that interval. The
+pinned source writes `transfer->user_data` after submit on the thread-creation
+failure and stop-timeout paths. Since `user_data` belongs to the transfer
+structure, this is a source-to-documentation contract conflict by inference;
+it is not evidence of a concurrent race, reproduced crash, or hardware event.
+The documentation does not by itself qualify this NUT driver's cleanup or
+provide a bounded-shutdown recipe. No electrical-safety claim follows.
+
+The official per-file history was refreshed on 2026-10-11 at
+[`drivers/apcmicrolink-usb.c`](https://github.com/networkupstools/nut/commits/master/drivers/apcmicrolink-usb.c).
+The latest listed relevant changes visible in that history predate pinned NUT
+HEAD `73c4502191d025e35122463986a80c676e734b04`; none shown addresses transfer
+cancellation ownership or pump/process-exit lifecycle. This is limited to the
+per-file history inspected, not a claim that no relevant PR or issue exists.

@@ -21,7 +21,7 @@ synthetic PNG images plus a JSON manifest. Choose a dedicated location for each
 run; the helper never overwrites or cleans up prior output. It accepts no data
 source, snapshot file, app configuration, or arbitrary scenario arguments.
 
-The fixed matrix contains eight chosen canvases:
+The fixed matrix contains eleven chosen canvases:
 
 | File | Scenario | Canvas |
 |---|---|---:|
@@ -30,6 +30,9 @@ The fixed matrix contains eight chosen canvases:
 | `widget-medium-light-current.png` | current, light, ordinary text size | 380 x 180 points |
 | `widget-medium-dark-large-power.png` | dark, very large synthetic W and VA readings | 380 x 180 points |
 | `widget-small-light-no-sources.png` | light, no-source/missing-data state | 180 x 180 points |
+| `widget-medium-compact-rich.png` | compact medium, light, populated readings, inset 16 points | 329 x 155 points |
+| `widget-medium-compact-partial.png` | compact medium, dark, partial data, inset 16 points | 329 x 155 points |
+| `widget-medium-compact-large-stale.png` | compact medium, dark, large readings and stale data, inset 16 points | 329 x 155 points |
 | `menu-light-single-source-stale.png` | single-source menu with stale synthetic capture | 300 x 260 points |
 | `energy-light-paused-missing.png` | input estimate paused; UPS channel missing | 420 x 220 points |
 | `energy-dark-large-two-channels.png` | two channels with very large synthetic estimates | 420 x 240 points |
@@ -81,3 +84,12 @@ symlink were refused, and the existing manifest remained unchanged.
 The normal validation script builds this helper but does not run it. Rendering
 is an explicit local operation; hosted CI does not provide raster, WidgetKit,
 interaction or VoiceOver evidence.
+
+On 2026-10-11 the probe generated eleven PNGs. The coordinator visually
+reviewed the three compact medium canvases listed above: six cells were visible;
+load, input and output readings, units and provenance, and the not-reported or
+stale states were legible without observed overlap in those canvases. This is a
+bounded visual inspection only. No automated pixel checks were run, and this
+does not establish WidgetKit layout, installation, or VoiceOver behavior. The
+fixtures use a January 2027 presentation date while relative-date text follows
+the host clock; that date mismatch remains a limitation.

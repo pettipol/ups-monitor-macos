@@ -131,6 +131,16 @@ private struct UPSRenderProbe {
                                           maximumAge: 30, snapshot: freshSnapshot)
         let missingPayload = WidgetSnapshot(publishedAt: freshDate, acquisition: .noSources,
                                             maximumAge: 30, snapshot: nil)
+        let partialSnapshot = MonitorSnapshot(
+            source: MonitorSource(provider: .apple, id: "render-partial", sessionID: "render-session",
+                                  identityStability: .sessionLocal),
+            capturedAt: capturedAt,
+            status: MonitorStatus(lineState: .onLine, quality: .available),
+            metrics: [MonitorMetric(id: .batteryCharge, value: 100, unit: .percent,
+                                    quality: .available, provenance: .derived)]
+        )
+        let partialPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
+                                            maximumAge: 30, snapshot: partialSnapshot)
 
         let menu = UPSMenuContentView(
             sources: [staleSnapshot],
@@ -164,6 +174,23 @@ private struct UPSRenderProbe {
             widgetCase(file: "widget-small-light-no-sources.png", scenario: "widget-small-light-missing-data",
                        width: 180, height: 180, scheme: "light", capturedAt: capturedAt,
                        presentationDate: freshDate, textSize: "standard", payload: missingPayload, medium: false),
+            viewCase(file: "widget-medium-compact-rich.png", scenario: "widget-medium-compact-rich-inset16",
+                     width: 329, height: 155, scheme: "light", capturedAt: capturedAt,
+                     presentationDate: freshDate, textSize: "standard",
+                     view: AnyView(UPSWidgetView(payload: freshPayload, date: freshDate, isMedium: true,
+                                                 isSyntheticFixture: true).padding(16)), background: .white),
+            viewCase(file: "widget-medium-compact-partial.png", scenario: "widget-medium-compact-partial-inset16",
+                     width: 329, height: 155, scheme: "dark", capturedAt: capturedAt,
+                     presentationDate: freshDate, textSize: "standard",
+                     view: AnyView(UPSWidgetView(payload: partialPayload, date: freshDate, isMedium: true,
+                                                 isSyntheticFixture: true).padding(16)),
+                     background: Color(red: 0.10, green: 0.10, blue: 0.10)),
+            viewCase(file: "widget-medium-compact-large-stale.png", scenario: "widget-medium-compact-large-stale-inset16",
+                     width: 329, height: 155, scheme: "dark", capturedAt: capturedAt,
+                     presentationDate: staleDate, textSize: "standard",
+                     view: AnyView(UPSWidgetView(payload: stalePayload, date: staleDate, isMedium: true,
+                                                 isSyntheticFixture: true).padding(16)),
+                     background: Color(red: 0.10, green: 0.10, blue: 0.10)),
             viewCase(file: "menu-light-single-source-stale.png", scenario: "menu-light-single-source-stale",
                      width: 300, height: 260, scheme: "light", capturedAt: capturedAt,
                      presentationDate: staleDate, textSize: "standard", view: AnyView(menu), background: .white),
@@ -249,6 +276,8 @@ private struct UPSRenderProbe {
             MonitorMetric(id: .batteryCharge, value: charge, unit: .percent, quality: .available, provenance: .reported),
             MonitorMetric(id: .batteryRuntime, value: 1_980, unit: .seconds, quality: .available, provenance: .estimated),
             MonitorMetric(id: .inputVoltage, value: 231.5, unit: .volts, quality: .available, provenance: .reported),
+            MonitorMetric(id: .outputVoltage, value: 229.8, unit: .volts, quality: .available, provenance: .reported),
+            MonitorMetric(id: .upsLoad, value: 35.8, unit: .percent, quality: .available, provenance: .reported),
             MonitorMetric(id: .upsRealPower, value: large, unit: .watts, quality: .available, provenance: .driverDerived),
             MonitorMetric(id: .upsApparentPower, value: large + 10, unit: .voltAmps, quality: .available, provenance: .driverDerived),
         ]
