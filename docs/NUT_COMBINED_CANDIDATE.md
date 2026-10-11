@@ -5,6 +5,11 @@ driver execution and hardware NOT_RUN**. This is a qualification of two
 existing patch artifacts together, not a new patch, a released backend, or
 permission to run the driver.
 
+A later [lifecycle/write candidate](NUT_LIFECYCLE_WRITE_CANDIDATE.md) layers a
+separate patch on this frozen baseline. It corrects incomplete write acceptance
+and partially mitigates signal termination; it does not close concurrency or
+hardware gates. The historical evidence and hashes below remain unchanged.
+
 ## Inputs
 
 The exact upstream base is

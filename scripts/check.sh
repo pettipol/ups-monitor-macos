@@ -94,6 +94,9 @@ printf '\n== Offline replay source-fence tests ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_fallback.py' -v
 printf '\n== Merged-pin HID candidate runner contract tests ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_validation.py' -v
+printf '\n== Offline lifecycle and write replay contract tests ==\n'
+"$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_guarded_dump_signals.py' -v
+"$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_usb_write_completion.py' -v
 
 printf '\n== Privacy declaration and packaging regressions ==\n'
 "$PYTHON_BIN" -m unittest discover -s scripts -p 'test_privacy_manifest.py' -v

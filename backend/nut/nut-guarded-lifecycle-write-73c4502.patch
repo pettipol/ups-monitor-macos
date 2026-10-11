@@ -1,0 +1,159 @@
+# Experimental GPL-2.0-or-later NUT patch; not application MIT code.
+# Base: 73c4502191d025e35122463986a80c676e734b04 plus merged guard and HID patches.
+# Incremental offline-only lifecycle/write candidate, not a hardware clearance.
+
+diff --git a/drivers/main.c b/drivers/main.c
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -2169,6 +2169,42 @@
+ 	dstate_dump();
+ 	upsdebugx(1, "%s: finished driver state dump for [%s]",
+ 		__func__, upsname);
++}
++
++static volatile sig_atomic_t guarded_dump_signal = 0;
++
++static void guarded_dump_signal_handler(int sig)
++{
++	guarded_dump_signal = sig;
++}
++
++static int setup_guarded_dump_signals(void)
++{
++	struct sigaction sa;
++	int signals[] = {SIGTERM, SIGINT, SIGQUIT};
++	size_t i;
++
++	memset(&sa, 0, sizeof(sa));
++	if (sigemptyset(&sa.sa_mask) != 0) {
++		return -1;
++	}
++	sa.sa_handler = guarded_dump_signal_handler;
++	sa.sa_flags = 0;
++
++	for (i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
++		if (sigaction(signals[i], &sa, NULL) != 0) {
++			return -1;
++		}
++	}
++
++	return 0;
++}
++
++static void exit_if_guarded_dump_signal_requested(void)
++{
++	if (guarded_dump_signal != 0) {
++		exit(EXIT_FAILURE);
++	}
+ }
+ 
+ # ifndef DRIVERS_MAIN_WITHOUT_MAIN
+@@ -2713,6 +2749,10 @@
+ 			fatalx(EXIT_FAILURE,
+ 				"guarded_monitor requires positive dump count in foreground and no -c, -k, or -P options");
+ 		}
++		if (setup_guarded_dump_signals() != 0) {
++			fatal_with_errno(EXIT_FAILURE, "Can't set up guarded dump termination signals");
++		}
++		exit_if_guarded_dump_signal_requested();
+ # endif	/* WIN32 */
+ 	}
+ 
+@@ -3219,12 +3259,18 @@
+ 	}
+ #endif
+ 
++# ifndef WIN32
++	exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 	dstate_setinfo("driver.state", "init.device");
+ 	upsdrv_callbacks.upsdrv_initups();
+ 	dstate_setinfo("driver.state", "init.quiet");
+ 
+ 	/* UPS is detected now, cleanup upon exit */
+ 	atexit(exit_upsdrv_cleanup);
++# ifndef WIN32
++	exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 
+ 	/* now see if things are very wrong out there */
+ 	if (upsdrv_callbacks.upsdrv_info->status == DRV_BROKEN) {
+@@ -3247,6 +3293,9 @@
+ 	/* get the base data established before allowing connections */
+ 	dstate_setinfo("driver.state", "init.info");
+ 	upsdrv_callbacks.upsdrv_initinfo();
++# ifndef WIN32
++	exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 
+ 	/* Register a way to call upsdrv_shutdown() among `sdcommands` */
+ 	dstate_addcmd("shutdown.default");
+@@ -3260,6 +3309,9 @@
+ 	 * their upsdrv_initinfo(), possibly to impact the initialization */
+ 	dstate_setinfo("driver.state", "init.updateinfo");
+ 	upsdrv_callbacks.upsdrv_updateinfo();
++# ifndef WIN32
++	exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 	dstate_setinfo("driver.state", "init.quiet");
+ 
+ 	if (dstate_getinfo("driver.flag.ignorelb")) {
+@@ -3485,7 +3537,11 @@
+ 	}
+ 
+ 	memset(&previous_battery_charge_timestamp, 0, sizeof(previous_battery_charge_timestamp));
+-	while (!exit_flag) {
++	while (!exit_flag
++# ifndef WIN32
++		&& !guarded_dump_signal
++# endif	/* !WIN32 */
++	) {
+ 		struct timeval	timeout;
+ 		const st_tree_t	*dstate_entry = NULL;
+ 
+@@ -3518,12 +3574,18 @@
+ 
+ 		dstate_setinfo("driver.state", "updateinfo");
+ 		upsdrv_callbacks.upsdrv_updateinfo();
++# ifndef WIN32
++		exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 		dstate_setinfo("driver.state", "quiet");
+ 
+ 		/* Dump the data tree (in upsc-like format) to stdout and exit */
+ 		if (dump_data) {
+ 			/* Wait for 'dump_data' update loops to ensure data completion */
+ 			if (update_count == dump_data) {
++# ifndef WIN32
++				exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 				dstate_setinfo("driver.state", "dumping");
+ 				dstate_dump();
+ 				set_exit_flag(EF_EXIT_SUCCESS);
+@@ -3543,6 +3605,9 @@
+ 		handle_reload_flag();
+ 	}
+ 
++# ifndef WIN32
++	exit_if_guarded_dump_signal_requested();
++# endif	/* !WIN32 */
+ 	/* if we get here, the exit flag was set by a signal handler */
+ 	/* however, avoid to "pollute" data dump output! */
+ 	if (!dump_data) {
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -784,6 +784,13 @@
+ 		return 0;
+ 	}
+ 
++	if (ret != (int)sizeof(raw_buf)) {
++		upsdebugx(1, "microlink_usb: interrupt-OUT write (Output 0x%02X) "
++			"returned an unexpected byte count (%d; expected %u)",
++			(unsigned int)mlink_report_out, ret, (unsigned int)sizeof(raw_buf));
++		return 0;
++	}
++
+ 	return 1;
+ }
+ 

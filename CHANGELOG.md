@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a separate offline lifecycle/write NUT candidate: reject incomplete
+  interrupt-OUT completions and add guarded dump cancellation checkpoints.
+  Exact extracted-source write tests and synthetic signal-helper tests pass;
+  cooperative termination remains partial and hardware remains on hold.
+- Added 17 synthetic Python contracts for those replay tools to app validation.
+  USB/serial driver builds passed offline; neither driver binary was executed.
+
 - Qualified the exact merged guarded/HID patch combination offline: both
   application orders produce identical sources; synthetic harnesses and
   USB/serial builds pass. Existing patches and source fences remain unchanged;

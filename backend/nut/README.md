@@ -10,6 +10,9 @@ validation patch targets that same merged pin and overlaps the USB driver
 source. Its [combined source/build qualification](../../docs/NUT_COMBINED_CANDIDATE.md)
 with the merged guarded patch is offline only; neither live execution nor a
 stack with the original-base guarded patch is qualified.
+The separate [lifecycle/write candidate](../../docs/NUT_LIFECYCLE_WRITE_CANDIDATE.md)
+adds a third, incremental patch to that combined baseline. It is still offline
+only, with cooperative termination partially qualified and concurrency open.
 
 | File | Scope |
 |---|---|
@@ -17,6 +20,7 @@ stack with the original-base guarded patch is qualified.
 | `nut-guarded-monitor.patch` | Experimental opt-in apcmicrolink USB restrictions; hardware untested |
 | `nut-guarded-monitor-73c4502.patch` | The same restrictions rebased onto merged upstream fixes; hardware untested |
 | `nut-hid-fallback-validation-73c4502.patch` | Offline candidate for truncated HID fields and wall-clock rollback; combined merged-guard builds checked separately; hardware untested |
+| `nut-guarded-lifecycle-write-73c4502.patch` | Incremental patch over merged guard/HID: exact write completion and partial cooperative cancellation; not hardware-qualified |
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
 | `test_guarded_source_paths.py` | Static regression checks on selected patched NUT call sites; never runs a driver |
@@ -25,6 +29,9 @@ stack with the original-base guarded patch is qualified.
 | `test_replay_hid_fallback.py` | Seven synthetic source-fence checks; no compiler or hardware |
 | `replay_hid_validation.py` and `test_hid_fallback_validation.c` | Exact-pin pristine/candidate extraction and synthetic fallback checks; generated excerpts and recording stubs, not a driver |
 | `test_replay_hid_validation.py` | Python source, candidate-hash and output-fence checks; no driver or hardware |
+| `replay_usb_write_completion.py`, `test_usb_write_completion.c` | Pinned send function and actual wrapper, static fake transfer; no libusb or driver execution |
+| `replay_guarded_dump_signals.py`, `test_guarded_dump_signals.c` | Pinned candidate helpers, baseline POSIX model and owned synthetic children; not NUT main/cleanup execution |
+| `test_replay_usb_write_completion.py`, `test_replay_guarded_dump_signals.py` | Seventeen Python source/path/output/linkage-fence contracts, without C execution |
 | `process_deadline.py` | Offline qualification helper: bounded child process, private output, no automatic driver launch |
 | `test_process_deadline*.py` | Synthetic subprocess and lifecycle regressions; never execute a UPS driver |
 
@@ -61,10 +68,12 @@ to `git apply --check` against the pinned NUT source.
 The original completion and guarded patches are derived from NUT source at
 `1a8369f8688443a500527059167d2f66ca27535f`; the guarded rebase and separate HID
 fallback validation patch target
-`73c4502191d025e35122463986a80c676e734b04`. All four patch artifacts follow
+`73c4502191d025e35122463986a80c676e734b04`. The lifecycle/write patch layers
+on that merged guard/HID combination. All five patch artifacts follow
 **GPL-2.0-or-later** according to the affected upstream source headers. The
 guarded policy C test and HID fallback validation C test carry their own GPL
 SPDX identifiers. The HID fallback replay C test is also GPL-2.0-or-later.
+The new signal and USB write C harnesses likewise carry GPL-2.0-or-later SPDX.
 Generated excerpts preserve upstream copyright/GPL notices and are not checked
 in. None of these artifacts is relicensed by the application's MIT license.
 The Python replay runners, source-fence tests and merged-rebase checker are MIT
@@ -89,7 +98,7 @@ alone is not a finding of legal noncompliance.
 source checkout. Its SHA-256 is recorded in `THIRD_PARTY_NOTICES.md`.
 `COPYING.NUT` is NUT's licensing overview: it describes license families in
 the full upstream tree and is not itself the complete GPL text. This
-repository contains four patch artifacts and synthetic C tests, not the
+repository contains five patch artifacts and synthetic C tests, not the
 complete NUT source tree or NUT/libusb binaries. The standalone HID fragment
 replay is not a full-driver build; the separate combined build evidence does
 not establish driver runtime or hardware behavior.
