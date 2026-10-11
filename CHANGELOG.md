@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a separate offline USB async-state candidate protecting three shared
+  scalar flags with the existing mutex. USB/serial builds pass without
+  executing drivers; complete async lifecycle and hardware remain unqualified.
+- Reproduced three scalar races in pinned source fragments with ThreadSanitizer
+  and passed the matching candidate cases. Added 17 Python runner contracts;
+  source-fragment replay is separate from app CI and full-driver execution.
+
 - Added a separate offline lifecycle/write NUT candidate: reject incomplete
   interrupt-OUT completions and add guarded dump cancellation checkpoints.
   Exact extracted-source write tests and synthetic signal-helper tests pass;

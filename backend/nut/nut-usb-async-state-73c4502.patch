@@ -1,0 +1,250 @@
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+index d820d00..3b2f9a7 100644
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -137,10 +137,9 @@ typedef struct {
+ static struct libusb_transfer *async_xfer = NULL;
+ static int async_xfer_active = 0;	/* 1 while a transfer is submitted/outstanding */
+ 
+-/* The queue, async_xfer_active and the fb_* globals are touched by both the
+- * pump thread and the main thread, so all go through async_lock. async_cond is
+- * signalled whenever the callback queues a report, so get_char() can block on
+- * it instead of polling. */
++/* Shared queue, transfer state and fallback values are protected by
++ * async_lock. async_cond is signalled whenever the callback queues a report,
++ * so get_char() can block on it instead of polling. */
+ static pthread_mutex_t async_lock = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_cond_t async_cond = PTHREAD_COND_INITIALIZER;
+ 
+@@ -151,7 +150,39 @@ static unsigned int async_queue_count = 0;	/* valid entries currently queued */
+ /* Keeps libusb's event loop serviced so the outstanding transfer is reaped and
+  * resubmitted promptly. */
+ static pthread_t async_pump_tid;
+-static volatile int async_pump_stop = 0;
++static int async_pump_stop = 0;
++
++static int microlink_usb_async_xfer_active_get(void)
++{
++	int active;
++	pthread_mutex_lock(&async_lock);
++	active = async_xfer_active;
++	pthread_mutex_unlock(&async_lock);
++	return active;
++}
++
++static void microlink_usb_async_xfer_active_set(int active)
++{
++	pthread_mutex_lock(&async_lock);
++	async_xfer_active = active;
++	pthread_mutex_unlock(&async_lock);
++}
++
++static int microlink_usb_async_pump_stop_get(void)
++{
++	int stop;
++	pthread_mutex_lock(&async_lock);
++	stop = async_pump_stop;
++	pthread_mutex_unlock(&async_lock);
++	return stop;
++}
++
++static void microlink_usb_async_pump_stop_set(int stop)
++{
++	pthread_mutex_lock(&async_lock);
++	async_pump_stop = stop;
++	pthread_mutex_unlock(&async_lock);
++}
+ 
+ /* Defined below microlink_usb_try_decode_fallback(), which the transfer
+  * callback calls. */
+@@ -159,6 +190,30 @@ static int microlink_usb_async_start(void);
+ static void microlink_usb_async_stop(void);
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
++static int microlink_usb_device_gone_get(void)
++{
++	int gone;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	pthread_mutex_lock(&async_lock);
++#endif
++	gone = usb_device_gone;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	pthread_mutex_unlock(&async_lock);
++#endif
++	return gone;
++}
++
++static void microlink_usb_device_gone_set(int gone)
++{
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	pthread_mutex_lock(&async_lock);
++#endif
++	usb_device_gone = gone;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	pthread_mutex_unlock(&async_lock);
++#endif
++}
++
+ static unsigned char in_report[MLINK_USB_REPORT_TOTAL_LEN];
+ static size_t in_report_len = 0;	/* bytes valid in in_report (0 = empty) */
+ static size_t in_report_pos = 0;	/* next unconsumed index */
+@@ -499,7 +554,7 @@ int microlink_usb_open(void)
+ 	if (ret < 1) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink: no matching USB Microlink UPS found");
+ 	}
+-	usb_device_gone = 0;
++	microlink_usb_device_gone_set(0);
+ 
+ 	dstate_setinfo("ups.vendorid", "%04x", curDevice.VendorID);
+ 	dstate_setinfo("ups.productid", "%04x", curDevice.ProductID);
+@@ -597,7 +652,7 @@ int microlink_usb_reset_and_reopen(void)
+ 		udev = NULL;
+ 		return 0;
+ 	}
+-	usb_device_gone = 0;
++	microlink_usb_device_gone_set(0);
+ 
+ 	upsdebugx(1, "microlink_usb: %s and reopened %s/%s (USB %04x:%04x)",
+ 		guarded_monitor ? "closed" : "reset",
+@@ -617,7 +672,7 @@ int microlink_usb_reset_and_reopen(void)
+ 
+ int microlink_usb_device_gone(void)
+ {
+-	return usb_device_gone;
++	return microlink_usb_device_gone_get();
+ }
+ 
+ /* A timeout of 0 to libusb_interrupt_transfer() means "wait forever", not
+@@ -640,7 +695,7 @@ void microlink_usb_flush_io(void)
+ 	}
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+-	if (async_xfer_active) {
++	if (microlink_usb_async_xfer_active_get()) {
+ 		/* The async listener owns the interrupt-IN endpoint, and its pump
+ 		 * thread already services the event loop continuously, so just drop
+ 		 * whatever is queued. This function must never call
+@@ -775,7 +830,7 @@ int microlink_usb_send_bytes(const unsigned char *buf, size_t len)
+ 	}
+ 
+ 	if (ret == LIBUSB_ERROR_NO_DEVICE) {
+-		usb_device_gone = 1;
++		microlink_usb_device_gone_set(1);
+ 	}
+ 
+ 	if (ret < 0) {
+@@ -892,7 +947,7 @@ static void *microlink_usb_async_pump(void *arg)
+ {
+ 	NUT_UNUSED_VARIABLE(arg);
+ 
+-	while (!async_pump_stop) {
++	while (!microlink_usb_async_pump_stop_get()) {
+ 		struct timeval tv;
+ 
+ 		tv.tv_sec = 0;
+@@ -972,11 +1027,9 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ 		 * microlink_usb_async_stop() frees this transfer once it observes
+ 		 * async_xfer_active go to 0. */
+ 		if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+-			usb_device_gone = 1;
++			microlink_usb_device_gone_set(1);
+ 		}
+-		pthread_mutex_lock(&async_lock);
+-		async_xfer_active = 0;
+-		pthread_mutex_unlock(&async_lock);
++		microlink_usb_async_xfer_active_set(0);
+ 		return;
+ 	case LIBUSB_TRANSFER_COMPLETED:
+ 	case LIBUSB_TRANSFER_ERROR:
+@@ -996,9 +1049,7 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ 	if (libusb_submit_transfer(transfer) != 0) {
+ 		upsdebugx(1, "microlink_usb: failed to resubmit async interrupt-IN "
+ 			"transfer, continuous listener stopped");
+-		pthread_mutex_lock(&async_lock);
+-		async_xfer_active = 0;
+-		pthread_mutex_unlock(&async_lock);
++		microlink_usb_async_xfer_active_set(0);
+ 	}
+ }
+ 
+@@ -1013,7 +1064,7 @@ static int microlink_usb_async_start(void)
+ 	if (!udev) {
+ 		return 0;
+ 	}
+-	if (async_xfer_active) {
++	if (microlink_usb_async_xfer_active_get()) {
+ 		return 1;
+ 	}
+ 
+@@ -1049,9 +1100,9 @@ static int microlink_usb_async_start(void)
+ 
+ 	async_queue_head = 0;
+ 	async_queue_count = 0;
+-	async_xfer_active = 1;
++	microlink_usb_async_xfer_active_set(1);
+ 
+-	async_pump_stop = 0;
++	microlink_usb_async_pump_stop_set(0);
+ 	if (pthread_create(&async_pump_tid, NULL, microlink_usb_async_pump, NULL) != 0) {
+ 		upsdebugx(1, "microlink_usb: failed to start the async pump thread, "
+ 			"abandoning the just-submitted transfer and falling back to "
+@@ -1063,7 +1114,7 @@ static int microlink_usb_async_start(void)
+ 		libusb_cancel_transfer(async_xfer);
+ 		async_xfer->user_data = (void *)1;
+ 		async_xfer = NULL;
+-		async_xfer_active = 0;
++		microlink_usb_async_xfer_active_set(0);
+ 		async_queue_head = 0;
+ 		async_queue_count = 0;
+ 		return 0;
+@@ -1091,13 +1142,13 @@ static void microlink_usb_async_stop(void)
+ 		return;
+ 	}
+ 
+-	async_pump_stop = 1;
++	microlink_usb_async_pump_stop_set(1);
+ 	pthread_join(async_pump_tid, NULL);
+ 
+-	if (async_xfer_active) {
++	if (microlink_usb_async_xfer_active_get()) {
+ 		libusb_cancel_transfer(async_xfer);
+ 
+-		for (i = 0; i < 50 && async_xfer_active; i++) {
++		for (i = 0; i < 50 && microlink_usb_async_xfer_active_get(); i++) {
+ 			struct timeval tv;
+ 
+ 			tv.tv_sec = 0;
+@@ -1105,13 +1156,13 @@ static void microlink_usb_async_stop(void)
+ 			libusb_handle_events_timeout_completed(nut_libusb_get_context(), &tv, NULL);
+ 		}
+ 
+-		if (async_xfer_active) {
++		if (microlink_usb_async_xfer_active_get()) {
+ 			upsdebugx(1, "microlink_usb: async transfer did not confirm "
+ 				"cancellation in time, abandoning it (it will free itself "
+ 				"once libusb eventually completes it)");
+ 			async_xfer->user_data = (void *)1;
+ 			async_xfer = NULL;
+-			async_xfer_active = 0;
++			microlink_usb_async_xfer_active_set(0);
+ 			async_queue_head = 0;
+ 			async_queue_count = 0;
+ 			return;
+@@ -1255,7 +1306,7 @@ static int microlink_usb_get_char_sync(unsigned char *ch, long d_usec)
+ 	}
+ 
+ 	if (ret == LIBUSB_ERROR_NO_DEVICE) {
+-		usb_device_gone = 1;
++		microlink_usb_device_gone_set(1);
+ 	}
+ 
+ 	if (ret < 0) {
+@@ -1300,7 +1351,7 @@ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+ 	microlink_async_report_t slot;
+ 	size_t copy_len;
+ 
+-	if (!async_xfer_active) {
++	if (!microlink_usb_async_xfer_active_get()) {
+ 		return microlink_usb_get_char_sync(ch, d_usec);
+ 	}
+ 
