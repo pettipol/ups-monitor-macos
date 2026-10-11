@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a pinned source-extracted USB lifecycle observation: six expected RED
+  pending-transfer/close cases and two completion controls with local mocks.
+  Runner contracts join normal CI; C observations are separate and offline.
+  No driver fix, hardware qualification or installed-app change is implied.
+- Published the source-only lifecycle question as NUT #3751 and linked the
+  qualification hold; maintainer guidance and process-exit policy remain open.
+
 - Added an optional sanitized Apple presentation name, paired with the current
   source observation and used only as a display label plus an optional local
   widget-envelope field. It does not change source identity or enter history,

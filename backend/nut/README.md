@@ -19,6 +19,9 @@ listener lifecycle, cancellation, or real hardware.
 The fifth incremental [observation-budget patch](../../docs/NUT_GUARD_DEADLINE_CANDIDATE.md)
 adds one nonrenewable guarded IN budget. It is cooperative, not a hard process
 deadline or hardware qualification.
+The separate [lifecycle observation](../../docs/NUT_LIFECYCLE_OBSERVATION.md)
+executes selected unchanged candidate functions with deterministic local mocks.
+It observes pending-transfer teardown gaps; it does not patch or qualify them.
 
 | File | Scope |
 |---|---|
@@ -30,6 +33,7 @@ deadline or hardware qualification.
 | `nut-usb-async-state-73c4502.patch` | Incremental patch over lifecycle/write: three mutex-protected scalar flags; broader lifecycle remains open |
 | `nut-usb-guard-deadline-73c4502.patch` | Fifth incremental patch: one monotonic guarded IN budget; lifecycle and real hardware remain open |
 | `replay_usb_guard_deadline.py`, `test_usb_guard_deadline.c`, `test_replay_usb_guard_deadline.py` | Pinned helper/callback experiment and separate static call-site checks; no driver or hardware execution |
+| `replay_usb_lifecycle_observation.py`, `test_usb_lifecycle_observation.c`, `test_replay_usb_lifecycle_observation.py` | Source-extracted start/stop/callback/close observation with local mocks and separate Python runner contracts; not real thread scheduling or driver execution |
 | `replay_usb_async_state.py`, `test_usb_async_state.c`, `test_replay_usb_async_state.py` | Pinned extracted-source concurrency experiment and synthetic runner contracts; no driver or hardware execution |
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
@@ -92,6 +96,8 @@ The async-state C harness also carries GPL-2.0-or-later SPDX; its Python runner
 and synthetic runner tests are original MIT material.
 The observation-budget C harness also carries GPL-2.0-or-later SPDX; its
 Python runner and runner-contract tests are original MIT material.
+The lifecycle-observation C harness is GPL-2.0-or-later; its Python runner and
+synthetic runner tests are original MIT material.
 Generated excerpts preserve upstream copyright/GPL notices and are not checked
 in. None of these artifacts is relicensed by the application's MIT license.
 The Python replay runners, source-fence tests and merged-rebase checker are MIT

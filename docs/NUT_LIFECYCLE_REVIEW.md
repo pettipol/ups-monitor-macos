@@ -64,8 +64,10 @@ policy is introduced by this review.
 
 A complete fix needs coordinated pump/callback/cleanup ownership, not merely
 a reconnect patch. Before modifying the candidate, prepare a focused upstream
-discussion and agree on the process-exit contract. No issue has been submitted
-by this review. Preserve the existing source pins and qualification limits.
+discussion and agree on the process-exit contract. The source-only question is
+now published as [NUT #3751](https://github.com/networkupstools/nut/issues/3751)
+(2026-10-11). Publication is not maintainer endorsement or a resolved contract.
+Preserve the existing source pins and qualification limits.
 
 Required synthetic cases include submit failure, thread-creation failure,
 callback delayed beyond the observation budget, cancel success without an
@@ -75,6 +77,11 @@ Assertions must cover resource ownership and exact reset/close/free/exit order,
 as well as ordinary-mode behavior. A stub that always returns promptly cannot
 qualify the blocked case. Existing scalar and observation-budget replays do
 not cover this integrated contract.
+
+The subsequent [source-extracted lifecycle observation](NUT_LIFECYCLE_OBSERVATION.md)
+covers startup failure and three cancellation outcomes through close using
+deterministic local mocks. It leaves real thread scheduling, blocked calls,
+reconnect, protocol STOP and process exit unqualified.
 
 ## libusb Contract Check (2026-10-11)
 
