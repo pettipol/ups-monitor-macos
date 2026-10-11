@@ -356,3 +356,19 @@ queries then showed only the new copy; no bundle/data deletion or system
 process restart occurred. WidgetKit still reported one medium widget. These
 checks do not establish that the visible desktop widget has reloaded the new
 compact title or prove real-time freshness.
+
+### Subsequent Host UI Check (2026-10-11)
+
+A further [bounded host interaction check](APP_HOST.md#bounded-live-host-interaction-check-2026-10-11)
+used the same signed compact-title build without rebuilding, restarting or
+changing registrations. A scoped process inspection located both host and
+extension in that bundle. This proves process presence, not a rendered widget
+or a successful snapshot read.
+
+The native UI inventory and Finder accessibility tree did not expose the UPS
+widget. The Finder screenshot returned a blank surface, so it supplies no
+evidence for or against the widget's appearance. No alternative capture method,
+cache-access workaround or permission change was attempted. The user's latest
+acknowledgement was not a visual confirmation of the compact title. Its desktop
+appearance and refresh timing therefore remain open; no new gallery action was
+requested. No hardware operation accompanied this check.

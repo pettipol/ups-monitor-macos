@@ -141,3 +141,36 @@ The embedded WidgetKit extension builds, while actual App Group access, widget
 installation and real NUT/UPS telemetry qualification remain open work.
 See [widget qualification](WIDGET_SIGNING.md). The release checklist is not
 cleared by this source preview.
+
+### Bounded Live-Host Interaction Check (2026-10-11)
+
+The already-running, locally signed SharedRelease host received a further native
+UI check without rebuilding or restarting it. The Apple backend remained
+selected and history recording remained off throughout. The details window
+displayed online status, charge and battery voltage; runtime, load, power and
+AC input/output voltages remained explicitly not reported. Energy estimates
+remained unavailable. This is an observation of the Apple path, not comparison
+with the UPS display or qualification of advanced telemetry.
+
+The following interactions were observed in the actual host:
+
+- Opening Local NUT settings, either from its button or the backend selector,
+  displayed an unconfigured form with Connect disabled. Escape or Cancel
+  returned to the Apple view. No field was changed, executable selected or NUT
+  client launched.
+- Local alert settings showed session alerts off. The focused Done button
+  closed the sheet with Space; no policy, toggle or notification permission was
+  changed. This does not qualify notification delivery.
+- Tab navigation reached the NUT settings, alert settings, stored-history,
+  history-recording and Refresh controls with accessible names. The history
+  switch was not activated. This is a bounded focus check, not VoiceOver or
+  complete keyboard-navigation qualification.
+- Space on the focused Refresh button left fresh Apple readings visible with
+  no visible error. Since automatic polling was also active, this observation
+  cannot independently establish that the manual refresh performed a read.
+
+The details window and the two settings sheets were visually inspected at
+their current sizes; no capture was saved or published. Menu-bar popover,
+multiple-source selection, full accessibility and widget desktop checks remain
+open. No driver, USB/HID interface, system process or power setting was touched.
+This check does not clear the release checklist or replace earlier build tests.
