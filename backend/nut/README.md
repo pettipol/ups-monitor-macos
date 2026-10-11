@@ -6,15 +6,17 @@ qualification artifacts, not an installed service or a production backend.
 The separately named guarded rebase targets only
 `73c4502191d025e35122463986a80c676e734b04`. Choose the artifact for its exact
 base; the two guarded patches are alternatives, not a stack. The separate HID
-validation patch targets that same merged pin, overlaps the USB driver source,
-and is not qualified stacked with either guarded patch.
+validation patch targets that same merged pin and overlaps the USB driver
+source. Its [combined source/build qualification](../../docs/NUT_COMBINED_CANDIDATE.md)
+with the merged guarded patch is offline only; neither live execution nor a
+stack with the original-base guarded patch is qualified.
 
 | File | Scope |
 |---|---|
 | `nut-upsc-completion.patch` | Reject interrupted or mismatched client variable lists |
 | `nut-guarded-monitor.patch` | Experimental opt-in apcmicrolink USB restrictions; hardware untested |
 | `nut-guarded-monitor-73c4502.patch` | The same restrictions rebased onto merged upstream fixes; hardware untested |
-| `nut-hid-fallback-validation-73c4502.patch` | Offline candidate for truncated HID fields and wall-clock rollback; not integrated with the guarded patch; hardware untested |
+| `nut-hid-fallback-validation-73c4502.patch` | Offline candidate for truncated HID fields and wall-clock rollback; combined merged-guard builds checked separately; hardware untested |
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
 | `test_guarded_source_paths.py` | Static regression checks on selected patched NUT call sites; never runs a driver |
@@ -29,8 +31,8 @@ and is not qualified stacked with either guarded patch.
 The original completion and guarded patches affect disjoint files and apply
 to the original pristine base revision. Completion-client evidence is not
 transferred to the rebased driver or a new client revision. The separate HID
-validation patch overlaps the USB driver source and is not qualified stacked
-with the guarded patch.
+validation patch overlaps the USB driver source; only the exact merged-guard
+combination linked above has separate offline source/build evidence.
 Read [client evidence](../../docs/NUT_CLIENT_COMPLETION.md) and
 [driver limitations](../../docs/NUT_GUARDS.md) before interpreting test results.
 The [merged rebase evidence](../../docs/NUT_GUARDS_MERGED.md) is separate from
@@ -42,8 +44,8 @@ The separate [HID fallback replay](../../docs/NUT_HID_REPLAY.md) compares the
 original base, corrective commit and merged master using exact source pins.
 Those three historical C replays passed their expected comparisons; known
 residuals remain. The new [HID fallback validation candidate](../../docs/NUT_HID_VALIDATION.md)
-is a separate extracted-source experiment and is not integrated with the guard
-or the application backend. Recorded status calls do not emulate final NUT
+is a separate extracted-source experiment. The later combined build is not
+integrated into the application backend. Recorded status calls do not emulate final NUT
 dstate inference.
 No test here demonstrates physical UPS compatibility, USB coexistence, or
 correct electrical measurements.
@@ -88,9 +90,9 @@ source checkout. Its SHA-256 is recorded in `THIRD_PARTY_NOTICES.md`.
 `COPYING.NUT` is NUT's licensing overview: it describes license families in
 the full upstream tree and is not itself the complete GPL text. This
 repository contains four patch artifacts and synthetic C tests, not the
-complete NUT source tree or NUT/libusb binaries. The HID validation candidate
-is not full-driver build/runtime qualification and does not establish hardware
-behavior.
+complete NUT source tree or NUT/libusb binaries. The standalone HID fragment
+replay is not a full-driver build; the separate combined build evidence does
+not establish driver runtime or hardware behavior.
 
 The original Python synthetic qualification helpers and tests are identified
 as application/MIT material. They do not include NUT source and do not

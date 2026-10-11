@@ -92,3 +92,9 @@ the base, corrective and merged source pins: a matching but truncated report
 can publish zero-extracted status as `OB`, and a backward wall-clock step can
 make old status appear fresh. Their relevance to any real device is **NOT
 DEMONSTRATED**. This guarded rebase does not fix or qualify either residual.
+
+The later [combined candidate record](NUT_COMBINED_CANDIDATE.md) applies the
+separate HID validation patch alongside this unchanged artifact and checks
+source equivalence, synthetic behavior and USB/serial builds. It is a distinct
+offline candidate, not a retrospective change to the guard-only results above
+or a real-device qualification.

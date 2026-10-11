@@ -11,7 +11,7 @@ It is not a legal opinion or a complete scan of future changes.
 | Original UPS Monitor Mac source and documentation | MIT, as stated in [`LICENSE`](LICENSE). The notice does not relicense identified third-party material. |
 | `backend/nut/nut-guarded-monitor.patch` and `test_guarded_policy.c` | GPL-2.0-or-later, following the affected NUT source headers; the C test carries its own SPDX identifier. |
 | `backend/nut/nut-guarded-monitor-73c4502.patch` | GPL-2.0-or-later; alternative guarded patch against exact NUT revision `73c4502191d025e35122463986a80c676e734b04`, not an application MIT file. |
-| `backend/nut/nut-hid-fallback-validation-73c4502.patch` | GPL-2.0-or-later NUT-derived offline candidate against exact revision `73c4502191d025e35122463986a80c676e734b04`; separate from and not qualified stacked with the guarded patch. |
+| `backend/nut/nut-hid-fallback-validation-73c4502.patch` | GPL-2.0-or-later NUT-derived offline candidate against exact revision `73c4502191d025e35122463986a80c676e734b04`; remains a separate artifact, with bounded [combined build evidence](docs/NUT_COMBINED_CANDIDATE.md). |
 | `backend/nut/nut-upsc-completion.patch` | GPL-2.0-or-later based on upstream `clients/upsc.c` and `clients/upsclient.c` headers. It is an unsubmitted patch against NUT, not an application MIT file. |
 | `backend/nut/test_hid_fallback_replay.c` and generated NUT excerpts | GPL-2.0-or-later; generated excerpts retain upstream copyright and GPL notices. Exact source revisions/digests are in the replay runner; generated files are external, not bundled. |
 | `backend/nut/test_hid_fallback_validation.c` and generated NUT excerpts | GPL-2.0-or-later; the test carries its own SPDX identifier and extracted fragments retain upstream copyright/GPL notices. Generated files are external, not bundled. |
@@ -34,9 +34,9 @@ the complete GPL text; the applicable GPL version 2 text for the identified
 patches is included as `backend/nut/LICENSE-GPL2`. This repository contains
 four patches and synthetic C tests, not the entire upstream NUT tree. The
 patches are not submitted or accepted upstream. The HID validation candidate
-is not integrated into the application backend or the guarded patch, and does
-not qualify full-driver build/runtime or hardware behavior. No NUT or libusb
-binary is currently distributed here.
+is not integrated into the application backend. Its separate combination with
+the merged guarded patch has offline source/build evidence only, not runtime
+or hardware qualification. No NUT or libusb binary is currently distributed here.
 
 Provenance check for `backend/nut/LICENSE-GPL2`: the repository copy has
 SHA-256 `ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6`.

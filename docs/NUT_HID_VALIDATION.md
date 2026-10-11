@@ -44,6 +44,11 @@ GPL-2.0-or-later patch against the pristine pin. It is not the guarded-monitor
 patch and does not add USB lifecycle restrictions. Stacking it with another
 patch is not qualified by the standalone replay.
 
+A later [combined candidate record](NUT_COMBINED_CANDIDATE.md) documents
+separate source comparisons, synthetic harnesses and USB/serial builds with
+the merged guarded patch. That evidence does not change this standalone
+runner's hash fences or qualify driver execution and hardware.
+
 `backend/nut/replay_hid_validation.py` uses the existing pinned extractor,
 verifies pristine and candidate sources, and creates output outside the
 repository and both source checkouts. The generated C contains exact bounded

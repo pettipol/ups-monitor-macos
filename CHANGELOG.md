@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Qualified the exact merged guarded/HID patch combination offline: both
+  application orders produce identical sources; synthetic harnesses and
+  USB/serial builds pass. Existing patches and source fences remain unchanged;
+  no NUT binary or hardware was run.
+
 - Added a separately pinned guarded NUT patch for merged master `73c4502`,
   preserving upstream padding, calibration and HID fallback corrections.
   Offline source/policy checks and USB/serial builds pass; no driver execution
