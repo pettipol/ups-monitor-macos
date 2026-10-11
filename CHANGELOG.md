@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added an on-demand Widget status sheet using the public WidgetKit
+  configuration API. Counts are restricted to the production widget kind;
+  unavailable queries are distinct from zero configured widgets. Configuration
+  status is not proof of installed rendering or shared-data freshness.
+
+- Documented the remaining experimental USB transfer-ownership and shutdown
+  gaps in a focused static review. Driver qualification remains on hold;
+  no hardware execution or forced-termination policy was introduced.
+
 - Added a separate offline guarded IN observation-budget candidate: one
   monotonic epoch, finite remaining-time submissions and no guarded sync
   fallback. USB/serial target builds pass without executing drivers. This is

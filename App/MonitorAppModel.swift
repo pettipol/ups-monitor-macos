@@ -40,6 +40,8 @@ final class MonitorAppModel {
     var backendTransition = false
     var showsNUTSettings = false
     var showsAlertSettings = false
+    var showsWidgetStatus = false
+    let widgetInstallation = WidgetInstallationModel()
     let alerts: UPSAlertController
     var energyEstimates = MonitorEnergyTracker().summaries
     let isPreview: Bool

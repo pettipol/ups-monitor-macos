@@ -16,6 +16,7 @@ struct UPSMonitorApp: App {
         .defaultSize(width: 900, height: 740)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            WidgetStatusCommands(model: model)
         }
 
         MenuBarExtra {
@@ -26,6 +27,22 @@ struct UPSMonitorApp: App {
                 .task { appDelegate.model = model; await model.startIfNeeded() }
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+private struct WidgetStatusCommands: Commands {
+    @Bindable var model: MonitorAppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(after: .toolbar) {
+            if !model.isSyntheticMode {
+                Button("Widget status", systemImage: "square.grid.2x2") {
+                    openWindow(id: "details")
+                    model.showsWidgetStatus = true
+                }
+            }
+        }
     }
 }
 
@@ -180,6 +197,9 @@ private struct MonitorWindow: View {
         }
         .sheet(isPresented: $model.showsAlertSettings) {
             UPSAlertSettingsView(model: model)
+        }
+        .sheet(isPresented: $model.showsWidgetStatus) {
+            WidgetStatusView(model: model.widgetInstallation)
         }
     }
 }

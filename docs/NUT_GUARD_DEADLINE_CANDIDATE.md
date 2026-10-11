@@ -5,6 +5,10 @@ This fifth incremental patch extends the frozen
 [async-state candidate](NUT_ASYNC_STATE_CANDIDATE.md). Historical patches and
 their replay source fences remain unchanged.
 
+The subsequent [lifecycle review](NUT_LIFECYCLE_REVIEW.md) records concrete
+pending-transfer and shutdown contract gaps. The driver remains on hold;
+the observation budget is not a completed lifecycle fix.
+
 ## Exact Source
 
 NUT HEAD: `73c4502191d025e35122463986a80c676e734b04`. The same-day official

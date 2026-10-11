@@ -45,6 +45,31 @@ local identity or container will work.
 
 ## Data and Reloading
 
+### On-Demand Configuration Status
+
+The production app exposes **View > Widget status**. Opening that sheet or
+using its refresh button calls Apple's public
+[`WidgetCenter.getCurrentConfigurations`](https://developer.apple.com/documentation/widgetkit/widgetcenter/getcurrentconfigurations(_:))
+API. It counts only the production widget kind and distinguishes small,
+medium and other families. Synthetic and unrelated kinds are excluded.
+No widgets are added, removed, registered or reloaded by this query, and it
+does not access an UPS or launch NUT. Synthetic app modes do not expose the
+command.
+
+A successful empty result means that no matching configured widgets were
+returned. An error is shown as unavailable, never as zero widgets; raw system
+error details are not displayed. The query does not prove actual rendering,
+shared-container access or fresh readings. Those remain separate checks even
+when the configured count is nonzero. It is not a replacement for inspecting
+the installed widget.
+
+To open the system gallery, use the desktop's **Edit Widgets** context-menu
+item, or click the menu-bar date/time and then **Edit Widgets** at the bottom
+of Notification Center. These are system UI actions, not an application named
+"Edit Widgets". See [Apple's widget guide](https://support.apple.com/or-in/guide/mac-help/mchl52be5da5/mac).
+
+### Snapshot Publication
+
 The app verifies the configured identifier against its own signed entitlements
 before asking Foundation for a container URL. The dedicated child directory and
 file must also pass ownership, type, size and permission checks. Invalid
@@ -185,3 +210,37 @@ guarantee against automatic rediscovery of development copies that still exist
 on disk. The installed manual explicitly warns that discovery may add removed
 registrations back. No installed widget rendering or shared-container read was
 established; the gallery remains a separate qualification gate.
+
+### Configuration Status Follow-Up
+
+On 2026-10-11, after the user's restart, the production Apple host was reopened
+and showed fresh native readings with history recording off. A new
+SharedRelease build containing the configuration-status sheet passed deep/strict
+signature checks, matching App Group checks, fixture `NO` checks on both
+bundles, and privacy-manifest validation. It reused the authorized local
+identity/group without provisioning updates. No signing values are published.
+
+The coordinator quit only the previous host normally and opened the new build.
+**View > Widget status** returned **No widgets added** from the real WidgetKit
+API. Refresh, close and reopening the sheet were exercised; each query
+returned the same empty production-kind result. The sheet was visually
+inspected without overlapping text. This establishes the on-demand query UI,
+not rendering of a system-hosted UPS widget or a successful extension read.
+VoiceOver, alternate appearance and nonzero real configuration counts were
+not qualified by this check.
+
+The builds had created three registry entries for this project's extension.
+After checking their bundle IDs and the current signed app, the previously
+authorized project-only registration correction removed the two older entries
+and registered the new signed extension. The all-versions/all-instances query
+then returned one copy. No app files, other widgets, system services or USB
+connections were changed. Automatic rediscovery remains possible.
+
+Seven synthetic controller tests cover empty/count/error results, production
+kind filtering, retry, overlapping checks and close/reopen with delayed success
+or failure. A single pending recheck is coalesced until the previous query
+returns; closing again clears it. Cancellation invalidates the result, not
+Apple's underlying callback operation. A system callback that never arrives
+has no guaranteed deadline; the sheet can still be closed. The full local
+Swift suite passed 246 tests, with two optional synthetic-client interop tests
+skipped. These tests never invoke WidgetKit's real configuration query.
