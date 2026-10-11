@@ -104,6 +104,7 @@ Current release gates include real interactive GUI review, target-specific advan
 | Data, privacy and security | [Privacy policy](PRIVACY.md) · [Security reporting](SECURITY.md) |
 | Compatibility and observations | [Compatibility matrix](docs/COMPATIBILITY.md) · [Native baseline](docs/NATIVE_BASELINE.md) |
 | NUT | [Feasibility and boundaries](docs/NUT_FEASIBILITY.md) · [Runtime](docs/NUT_RUNTIME.md) · [Client completion qualification](docs/NUT_CLIENT_COMPLETION.md) · [Experimental driver guards](docs/NUT_GUARDS.md) · [Open upstream issues](docs/NUT_UPSTREAM_STATUS.md) |
+| Offline NUT candidates | [Shared USB state](docs/NUT_ASYNC_STATE_CANDIDATE.md) · [Guarded IN observation budget](docs/NUT_GUARD_DEADLINE_CANDIDATE.md), neither installed nor hardware-qualified |
 | History and energy | [History storage](docs/HISTORY.md) · [History browsing](docs/HISTORY_BROWSING.md) · [Energy tracker](docs/ENERGY_TRACKER.md) · [Energy UI](docs/ENERGY_UI.md) |
 | Widget and alerts | [Widget signing and limits](docs/WIDGET_SIGNING.md) · [Alert policy](docs/ALERT_POLICY.md) · [Alert delivery](docs/ALERT_DELIVERY.md) |
 | Build and release | [CI](docs/CI.md) · [Local validation](docs/VALIDATION.md) · [Versioning](docs/VERSIONING.md) · [Release checklist](docs/RELEASE_CHECKLIST.md) |

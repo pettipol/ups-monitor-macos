@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a separate offline guarded IN observation-budget candidate: one
+  monotonic epoch, finite remaining-time submissions and no guarded sync
+  fallback. USB/serial target builds pass without executing drivers. This is
+  cooperative, not a hard process deadline or hardware qualification.
+- Reproduced continued callback activity on the previous source, passed nine
+  candidate helper/callback cases, and added 14 Python runner contracts.
+  Startup/read/flush/reopen checks are static, separate from dynamic replay.
+
 - Added a separate offline USB async-state candidate protecting three shared
   scalar flags with the existing mutex. USB/serial builds pass without
   executing drivers; complete async lifecycle and hardware remain unqualified.

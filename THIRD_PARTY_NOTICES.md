@@ -15,6 +15,8 @@ It is not a legal opinion or a complete scan of future changes.
 | `backend/nut/nut-guarded-lifecycle-write-73c4502.patch` | GPL-2.0-or-later incremental candidate over the exact merged guard/HID combination; [bounded evidence and open gates](docs/NUT_LIFECYCLE_WRITE_CANDIDATE.md). |
 | `backend/nut/nut-usb-async-state-73c4502.patch`, `test_usb_async_state.c` and generated excerpts | GPL-2.0-or-later; incremental NUT-derived patch over lifecycle/write, synthetic C test and excerpts preserving upstream notices; [scope](docs/NUT_ASYNC_STATE_CANDIDATE.md). |
 | `backend/nut/replay_usb_async_state.py`, `test_replay_usb_async_state.py` | Original MIT runner and synthetic contracts; no driver execution. |
+| `backend/nut/nut-usb-guard-deadline-73c4502.patch`, `test_usb_guard_deadline.c` and generated excerpts | GPL-2.0-or-later; incremental NUT-derived patch, synthetic C test and excerpts retaining upstream notices; [scope](docs/NUT_GUARD_DEADLINE_CANDIDATE.md). |
+| `backend/nut/replay_usb_guard_deadline.py`, `test_replay_usb_guard_deadline.py` | Original MIT runner and synthetic contracts; no driver execution. |
 | `backend/nut/nut-upsc-completion.patch` | GPL-2.0-or-later based on upstream `clients/upsc.c` and `clients/upsclient.c` headers. It is an unsubmitted patch against NUT, not an application MIT file. |
 | `backend/nut/test_hid_fallback_replay.c` and generated NUT excerpts | GPL-2.0-or-later; generated excerpts retain upstream copyright and GPL notices. Exact source revisions/digests are in the replay runner; generated files are external, not bundled. |
 | `backend/nut/test_hid_fallback_validation.c` and generated NUT excerpts | GPL-2.0-or-later; the test carries its own SPDX identifier and extracted fragments retain upstream copyright/GPL notices. Generated files are external, not bundled. |
@@ -37,7 +39,7 @@ licensing overview: it says most NUT files are GPL-2.0-or-later and describes
 other license families present in the full upstream tree. It is not itself
 the complete GPL text; the applicable GPL version 2 text for the identified
 patches is included as `backend/nut/LICENSE-GPL2`. This repository contains
-six patches and synthetic C tests, not the entire upstream NUT tree. The
+seven patches and synthetic C tests, not the entire upstream NUT tree. The
 patches are not submitted or accepted upstream. The HID validation candidate
 is not integrated into the application backend. Its separate combination with
 the merged guarded patch has offline source/build evidence only, not runtime

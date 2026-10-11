@@ -1,0 +1,625 @@
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+index 3b2f9a7..af52e6b 100644
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -143,6 +143,14 @@ static int async_xfer_active = 0;	/* 1 while a transfer is submitted/outstanding
+ static pthread_mutex_t async_lock = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_cond_t async_cond = PTHREAD_COND_INITIALIZER;
+ 
++/* Guarded mode owns one process-local monotonic deadline. It is terminal once
++ * the clock fails or the budget expires; later calls cannot renew it. */
++static int guard_requested = 0;
++static int guard_started = 0;
++static int guard_terminal = 0;
++static long guard_seconds = 0;
++static struct timespec guard_start;
++
+ static microlink_async_report_t async_queue[MLINK_USB_ASYNC_QUEUE_LEN];
+ static unsigned int async_queue_head = 0;	/* next slot to pop */
+ static unsigned int async_queue_count = 0;	/* valid entries currently queued */
+@@ -152,6 +160,135 @@ static unsigned int async_queue_count = 0;	/* valid entries currently queued */
+ static pthread_t async_pump_tid;
+ static int async_pump_stop = 0;
+ 
++static int microlink_usb_guard_remaining_ms_locked(unsigned int *remaining_ms)
++{
++#if defined(HAVE_CLOCK_GETTIME) && HAVE_CLOCK_GETTIME \
++ && defined(HAVE_CLOCK_MONOTONIC) && HAVE_CLOCK_MONOTONIC
++	struct timespec now;
++	time_t elapsed_sec;
++	long elapsed_nsec;
++	long remaining_sec;
++	long remaining_nsec;
++	unsigned long ms;
++
++	if (!guard_requested) {
++		*remaining_ms = 0;
++		return 1;
++	}
++	if (guard_terminal || !guard_started
++	 || clock_gettime(CLOCK_MONOTONIC, &now) != 0
++	 || now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L
++	 || now.tv_sec < guard_start.tv_sec) {
++		guard_terminal = 1;
++		pthread_cond_broadcast(&async_cond);
++		return 0;
++	}
++	elapsed_sec = now.tv_sec - guard_start.tv_sec;
++	elapsed_nsec = now.tv_nsec - guard_start.tv_nsec;
++	if (elapsed_nsec < 0) {
++		elapsed_sec--;
++		elapsed_nsec += 1000000000L;
++	}
++	if (elapsed_sec < 0 || (unsigned long)elapsed_sec >= (unsigned long)guard_seconds) {
++		guard_terminal = 1;
++		pthread_cond_broadcast(&async_cond);
++		return 0;
++	}
++	remaining_sec = guard_seconds - (long)elapsed_sec;
++	remaining_nsec = -elapsed_nsec;
++	if (remaining_nsec < 0) {
++		remaining_sec--;
++		remaining_nsec += 1000000000L;
++	}
++	if (remaining_sec < 0 || (remaining_sec == 0 && remaining_nsec == 0)) {
++		guard_terminal = 1;
++		pthread_cond_broadcast(&async_cond);
++		return 0;
++	}
++	ms = (unsigned long)remaining_sec * 1000UL
++		+ ((unsigned long)remaining_nsec + 999999UL) / 1000000UL;
++	if (ms == 0) {
++		ms = 1;
++	}
++	if (ms > 300000UL) {
++		ms = 300000UL;
++	}
++	*remaining_ms = (unsigned int)ms;
++	return 1;
++#else
++	(void)remaining_ms;
++	guard_terminal = 1;
++	return 0;
++#endif
++}
++
++static int microlink_usb_guard_expired_locked(void)
++{
++	unsigned int remaining_ms;
++
++	if (!guard_requested) {
++		return 0;
++	}
++	return !microlink_usb_guard_remaining_ms_locked(&remaining_ms);
++}
++
++static void microlink_usb_guard_invalidate(void)
++{
++	pthread_mutex_lock(&async_lock);
++	guard_terminal = 1;
++	pthread_cond_broadcast(&async_cond);
++	pthread_mutex_unlock(&async_lock);
++}
++
++static int microlink_usb_guard_timeout_ms_locked(unsigned int *timeout_ms)
++{
++	if (!guard_requested) {
++		*timeout_ms = 0;
++		return 1;
++	}
++	return microlink_usb_guard_remaining_ms_locked(timeout_ms);
++}
++
++int microlink_usb_guard_begin(long seconds)
++{
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD) \
++ && defined(HAVE_CLOCK_GETTIME) && HAVE_CLOCK_GETTIME \
++ && defined(HAVE_CLOCK_MONOTONIC) && HAVE_CLOCK_MONOTONIC
++	int ok = 0;
++
++	pthread_mutex_lock(&async_lock);
++	if (guard_requested) {
++		ok = !microlink_usb_guard_expired_locked();
++	} else {
++		guard_requested = 1;
++		if (seconds < 1 || seconds > 300
++		 || clock_gettime(CLOCK_MONOTONIC, &guard_start) != 0
++		 || guard_start.tv_sec < 0 || guard_start.tv_nsec < 0
++		 || guard_start.tv_nsec >= 1000000000L) {
++			guard_terminal = 1;
++		} else {
++			guard_seconds = seconds;
++			guard_started = 1;
++			ok = 1;
++		}
++	}
++	pthread_mutex_unlock(&async_lock);
++	return ok;
++#else
++	(void)seconds;
++	return 0;
++#endif
++}
++
++int microlink_usb_guard_expired(void)
++{
++	int expired;
++	pthread_mutex_lock(&async_lock);
++	expired = microlink_usb_guard_expired_locked();
++	pthread_mutex_unlock(&async_lock);
++	return expired;
++}
++
+ static int microlink_usb_async_xfer_active_get(void)
+ {
+ 	int active;
+@@ -188,6 +325,17 @@ static void microlink_usb_async_pump_stop_set(int stop)
+  * callback calls. */
+ static int microlink_usb_async_start(void);
+ static void microlink_usb_async_stop(void);
++#else
++int microlink_usb_guard_begin(long seconds)
++{
++	(void)seconds;
++	return 0;
++}
++
++int microlink_usb_guard_expired(void)
++{
++	return 1;
++}
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
+ static int microlink_usb_device_gone_get(void)
+@@ -549,6 +697,9 @@ int microlink_usb_open(void)
+ 	}
+ 
+ 	regex_matcher->next = &microlink_usb_device_matcher;
++	if (guarded_monitor && microlink_usb_guard_expired()) {
++		fatalx(EXIT_FAILURE, "apcmicrolink: guarded USB observation budget expired before device open");
++	}
+ 
+ 	ret = comm_driver->open_dev(&udev, &curDevice, regex_matcher, microlink_usb_report_callback);
+ 	if (ret < 1) {
+@@ -569,6 +720,10 @@ int microlink_usb_open(void)
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	if (!microlink_usb_async_start()) {
++		if (guarded_monitor) {
++			microlink_usb_guard_invalidate();
++			return 0;
++		}
+ 		upsdebugx(1, "microlink_usb: continuous async listener unavailable, "
+ 			"falling back to per-call synchronous interrupt-IN reads");
+ 	}
+@@ -613,6 +768,9 @@ static void microlink_usb_reset_handle(void *handle)
+ int microlink_usb_reset_and_reopen(void)
+ {
+ 	int ret;
++	if (guarded_monitor && microlink_usb_guard_expired()) {
++		return 0;
++	}
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	/* Cancel the outstanding async transfer before resetting and closing
+@@ -646,6 +804,9 @@ int microlink_usb_reset_and_reopen(void)
+ 	}
+ 
+ 	/* Re-open using the still-valid regex_matcher (never freed here). */
++	if (guarded_monitor && microlink_usb_guard_expired()) {
++		return 0;
++	}
+ 	ret = comm_driver->open_dev(&udev, &curDevice, regex_matcher,
+ 		microlink_usb_report_callback);
+ 	if (ret < 1) {
+@@ -662,6 +823,10 @@ int microlink_usb_reset_and_reopen(void)
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	if (!microlink_usb_async_start()) {
++		if (guarded_monitor) {
++			microlink_usb_guard_invalidate();
++			return 0;
++		}
+ 		upsdebugx(1, "microlink_usb: continuous async listener unavailable after "
+ 			"reset, falling back to per-call synchronous interrupt-IN reads");
+ 	}
+@@ -695,6 +860,20 @@ void microlink_usb_flush_io(void)
+ 	}
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	/* Guarded mode never falls back to a synchronous endpoint read. */
++	pthread_mutex_lock(&async_lock);
++	if (guard_requested) {
++		if (microlink_usb_guard_expired_locked() || !async_xfer_active) {
++			pthread_mutex_unlock(&async_lock);
++			return;
++		}
++		async_queue_head = 0;
++		async_queue_count = 0;
++		pthread_mutex_unlock(&async_lock);
++		return;
++	}
++	pthread_mutex_unlock(&async_lock);
++
+ 	if (microlink_usb_async_xfer_active_get()) {
+ 		/* The async listener owns the interrupt-IN endpoint, and its pump
+ 		 * thread already services the event loop continuously, so just drop
+@@ -969,8 +1148,24 @@ static void *microlink_usb_async_pump(void *arg)
+ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ {
+ 	int abandoned = (transfer->user_data != NULL);
++	unsigned int timeout_ms;
++
++	if (abandoned) {
++		free(transfer->buffer);
++		libusb_free_transfer(transfer);
++		return;
++	}
++
++	pthread_mutex_lock(&async_lock);
++	if (microlink_usb_guard_expired_locked()) {
++		async_xfer_active = 0;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
++		return;
++	}
++	pthread_mutex_unlock(&async_lock);
+ 
+-	if (!abandoned && transfer->status == LIBUSB_TRANSFER_COMPLETED && transfer->actual_length > 0) {
++	if (transfer->status == LIBUSB_TRANSFER_COMPLETED && transfer->actual_length > 0) {
+ 		size_t copy_len = (size_t)transfer->actual_length;
+ 
+ 		if (copy_len > MLINK_USB_REPORT_TOTAL_LEN) {
+@@ -986,6 +1181,12 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ 		 * tunnel reply; the fb_* globals are read by the main thread in
+ 		 * microlink_usb_get_hid_fallback(), hence the lock. */
+ 		pthread_mutex_lock(&async_lock);
++		if (microlink_usb_guard_expired_locked()) {
++			async_xfer_active = 0;
++			pthread_cond_broadcast(&async_cond);
++			pthread_mutex_unlock(&async_lock);
++			return;
++		}
+ 
+ 		microlink_usb_try_decode_fallback(transfer->buffer, copy_len);
+ 
+@@ -1004,12 +1205,6 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ 		pthread_mutex_unlock(&async_lock);
+ 	}
+ 
+-	if (abandoned) {
+-		free(transfer->buffer);
+-		libusb_free_transfer(transfer);
+-		return;
+-	}
+-
+ #ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+ #pragma GCC diagnostic push
+ #endif
+@@ -1029,7 +1224,10 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ 		if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+ 			microlink_usb_device_gone_set(1);
+ 		}
+-		microlink_usb_async_xfer_active_set(0);
++		pthread_mutex_lock(&async_lock);
++		async_xfer_active = 0;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
+ 		return;
+ 	case LIBUSB_TRANSFER_COMPLETED:
+ 	case LIBUSB_TRANSFER_ERROR:
+@@ -1046,20 +1244,33 @@ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ #pragma GCC diagnostic pop
+ #endif
+ 
++	pthread_mutex_lock(&async_lock);
++	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		async_xfer_active = 0;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
++		return;
++	}
++	pthread_mutex_unlock(&async_lock);
++	transfer->timeout = timeout_ms;
+ 	if (libusb_submit_transfer(transfer) != 0) {
+ 		upsdebugx(1, "microlink_usb: failed to resubmit async interrupt-IN "
+ 			"transfer, continuous listener stopped");
+-		microlink_usb_async_xfer_active_set(0);
++		pthread_mutex_lock(&async_lock);
++		async_xfer_active = 0;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
+ 	}
+ }
+ 
+ /* Start the listener and its pump thread. Returns 1 if running (or already
+- * was), 0 if it could not be started - callers fall back to per-call
+- * synchronous reads then, so this is never fatal. */
++ * was), 0 if it could not be started; default mode may fall back to per-call
++ * synchronous reads, while guarded mode treats this as fatal. */
+ static int microlink_usb_async_start(void)
+ {
+ 	int ep_in;
+ 	unsigned char *buf;
++	unsigned int timeout_ms;
+ 
+ 	if (!udev) {
+ 		return 0;
+@@ -1067,6 +1278,12 @@ static int microlink_usb_async_start(void)
+ 	if (microlink_usb_async_xfer_active_get()) {
+ 		return 1;
+ 	}
++	pthread_mutex_lock(&async_lock);
++	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
++	pthread_mutex_unlock(&async_lock);
+ 
+ 	ep_in = USB_ENDPOINT_IN + usb_subdriver.hid_ep_in;
+ 
+@@ -1081,13 +1298,33 @@ static int microlink_usb_async_start(void)
+ 		return 0;
+ 	}
+ 
+-	/* Timeout 0 on an async transfer means "no timeout on this submission",
+-	 * unlike the synchronous API - exactly what we want here: stay outstanding
+-	 * until data arrives or it is cancelled. user_data starts NULL ("owned");
++	pthread_mutex_lock(&async_lock);
++	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		pthread_mutex_unlock(&async_lock);
++		libusb_free_transfer(async_xfer);
++		free(buf);
++		async_xfer = NULL;
++		return 0;
++	}
++	pthread_mutex_unlock(&async_lock);
++
++	/* Timeout 0 remains the unbounded default-mode behavior. Guarded transfers
++	 * instead carry the remaining observation budget. user_data starts NULL ("owned");
+ 	 * microlink_usb_async_stop() sets it to mark the transfer abandoned. */
+ 	libusb_fill_interrupt_transfer(async_xfer, udev, ep_in,
+ 		buf, (int)MLINK_USB_REPORT_TOTAL_LEN,
+-		microlink_usb_async_cb, NULL, 0);
++		microlink_usb_async_cb, NULL, timeout_ms);
++
++	pthread_mutex_lock(&async_lock);
++	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		pthread_mutex_unlock(&async_lock);
++		libusb_free_transfer(async_xfer);
++		free(buf);
++		async_xfer = NULL;
++		return 0;
++	}
++	pthread_mutex_unlock(&async_lock);
++	async_xfer->timeout = timeout_ms;
+ 
+ 	if (libusb_submit_transfer(async_xfer) != 0) {
+ 		upsdebugx(1, "microlink_usb: failed to submit the initial async "
+@@ -1350,8 +1587,18 @@ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+ 	struct timespec deadline;
+ 	microlink_async_report_t slot;
+ 	size_t copy_len;
++	int guarded;
++	int expired;
+ 
+-	if (!microlink_usb_async_xfer_active_get()) {
++	pthread_mutex_lock(&async_lock);
++	guarded = guard_requested;
++	expired = guarded ? microlink_usb_guard_expired_locked() : 0;
++	if (guarded && (expired || !async_xfer_active)) {
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
++	pthread_mutex_unlock(&async_lock);
++	if (!guarded && !microlink_usb_async_xfer_active_get()) {
+ 		return microlink_usb_get_char_sync(ch, d_usec);
+ 	}
+ 
+@@ -1368,11 +1615,29 @@ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+ 		d_usec = 0;
+ 	}
+ 
+-	/* pthread_cond_timedwait() takes an absolute deadline on the system
+-	 * (CLOCK_REALTIME) clock by default - no portable way to request
+-	 * CLOCK_MONOTONIC here without pthread_condattr_setclock(), a POSIX
+-	 * extension not available everywhere this codebase targets. */
+-	clock_gettime(CLOCK_REALTIME, &deadline);
++	pthread_mutex_lock(&async_lock);
++	if (guarded) {
++		unsigned int remaining_ms;
++		long budget_usec;
++
++		if (!microlink_usb_guard_remaining_ms_locked(&remaining_ms)
++		 || !async_xfer_active) {
++			pthread_mutex_unlock(&async_lock);
++			return 0;
++		}
++		budget_usec = (long)remaining_ms * 1000L;
++		if (d_usec > budget_usec) {
++			d_usec = budget_usec;
++		}
++	}
++
++	/* pthread_cond_timedwait() uses CLOCK_REALTIME by default. */
++	if (clock_gettime(CLOCK_REALTIME, &deadline) != 0 && guarded) {
++		guard_terminal = 1;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
+ 	deadline.tv_sec += d_usec / 1000000L;
+ 	deadline.tv_nsec += (d_usec % 1000000L) * 1000L;
+ 	if (deadline.tv_nsec >= 1000000000L) {
+@@ -1380,9 +1645,9 @@ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+ 		deadline.tv_nsec -= 1000000000L;
+ 	}
+ 
+-	pthread_mutex_lock(&async_lock);
+-
+-	while (async_queue_count == 0) {
++	while (async_queue_count == 0
++	 && (!guarded || async_xfer_active)
++	 && (!guarded || !microlink_usb_guard_expired_locked())) {
+ 		if (pthread_cond_timedwait(&async_cond, &async_lock, &deadline) != 0) {
+ 			/* Timed out (or some other wait error) - no report showed up
+ 			 * within the caller's budget. */
+@@ -1390,6 +1655,10 @@ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+ 			return 0;
+ 		}
+ 	}
++	if ((guarded && microlink_usb_guard_expired_locked()) || async_queue_count == 0) {
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
+ 
+ 	slot = async_queue[async_queue_head];
+ 	async_queue_head = (async_queue_head + 1) % MLINK_USB_ASYNC_QUEUE_LEN;
+diff --git a/drivers/apcmicrolink-usb.h b/drivers/apcmicrolink-usb.h
+index 08817e3..944cb27 100644
+--- a/drivers/apcmicrolink-usb.h
++++ b/drivers/apcmicrolink-usb.h
+@@ -20,10 +20,20 @@
+  * USB device to open. */
+ void microlink_usb_addvars(void);
+ 
++/* Start the guarded USB observation budget once. Repeated calls are
++ * idempotent and never extend the original monotonic deadline. Returns 1
++ * when the guarded listener can be used, 0 when its prerequisites are absent
++ * or the clock/deadline has failed. */
++int microlink_usb_guard_begin(long seconds);
++
++/* Returns 1 only when a requested guarded budget is expired or terminally
++ * invalid. Returns 0 when no budget was requested or it remains valid. */
++int microlink_usb_guard_expired(void);
++
+ /* Open the USB Microlink UPS matching the driver's vendorid/productid/
+  * vendor/product/serial/bus/device filters (or the first supported device
+- * if none are given). Fatal on failure, like the sibling USB drivers'
+- * open helpers - never returns 0/negative. */
++ * if none are given). Fatal on device-open failure; guarded listener startup
++ * failure returns 0 so the caller can fail after driver cleanup is registered. */
+ int microlink_usb_open(void);
+ 
+ /* Close the USB device and release matcher/device string resources. */
+diff --git a/drivers/apcmicrolink.c b/drivers/apcmicrolink.c
+index 298cf71..5c714a7 100644
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -259,8 +259,6 @@ static int guarded_monitor = 0;
+ #ifdef WITH_USB
+ static int is_usb = 0;
+ static long guarded_deadline_seconds = 0;
+-static st_tree_timespec_t guarded_deadline_start;
+-static int guarded_deadline_active = 0;
+ #endif /* WITH_USB */
+ static unsigned char rxbuf[MLINK_MAX_FRAME * 2];
+ static size_t rxbuf_len = 0;
+@@ -640,34 +638,9 @@ static int microlink_timeout_expired(const st_tree_timespec_t *start,
+ }
+ 
+ #ifdef WITH_USB
+-static int microlink_guard_elapsed(void *unused, double *elapsed)
+-{
+-	st_tree_timespec_t now;
+-	(void)unused;
+-	if (state_get_timestamp(&now) != 0)
+-		return -1;
+-	*elapsed = difftime_st_tree_timespec(now, guarded_deadline_start);
+-	return 0;
+-}
+-
+-static void microlink_guard_deadline_begin(void)
+-{
+-	if (guarded_monitor) {
+-		if (state_get_timestamp(&guarded_deadline_start) != 0)
+-			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor cannot read monotonic clock");
+-		guarded_deadline_active = 1;
+-	}
+-}
+-
+ static int microlink_guard_deadline_expired(void)
+ {
+-	if (!guarded_monitor) {
+-		return 0;
+-	}
+-	if (!guarded_deadline_active)
+-		return 1;
+-	return nut_guard_deadline_expired((double)guarded_deadline_seconds,
+-		microlink_guard_elapsed, NULL);
++	return guarded_monitor ? microlink_usb_guard_expired() : 0;
+ }
+ #endif /* WITH_USB */
+ 
+@@ -3208,10 +3181,6 @@ static int microlink_poll_burst(void)
+ 	time_t started = microlink_now();
+ 	time_t now = started;
+ 
+-#ifdef WITH_USB
+-	microlink_guard_deadline_begin();
+-#endif /* WITH_USB */
+-
+ 	while (fetched < budget || microlink_auth_pending(now)) {
+ 		/* A pending shutdown outranks finishing the pass. The main loop
+ 		 * cannot begin tearing down until upsdrv_updateinfo() returns, so
+@@ -3333,9 +3302,6 @@ static int microlink_reconnect_session(void)
+ 		consecutive_timeouts, descriptor_usage_count, descriptor_ready,
+ 		authentication_sent);
+ 	session_ready = 0;
+-#ifdef WITH_USB
+-	microlink_guard_deadline_begin();
+-#endif /* WITH_USB */
+ 	return microlink_start_session();
+ }
+ 
+@@ -3848,6 +3814,9 @@ void upsdrv_initups(void)
+ 			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor guard_deadline must be an integer from 1 to 300 seconds");
+ 		}
+ 		guarded_deadline_seconds = deadline;
++		if (!microlink_usb_guard_begin(guarded_deadline_seconds)) {
++			fatalx(EXIT_FAILURE, "apcmicrolink guarded_monitor requires a working monotonic async USB listener");
++		}
+ 	}
+ 	if (use_usb) {
+ 		microlink_usb_open();
+@@ -3926,6 +3895,12 @@ void upsdrv_initinfo(void)
+ {
+ 	int microlink_ready = 0;
+ 
++#ifdef WITH_USB
++	if (guarded_monitor && is_usb && microlink_guard_deadline_expired()) {
++		fatalx(EXIT_FAILURE, "apcmicrolink: guarded USB listener could not be started");
++	}
++#endif /* WITH_USB */
++
+ 	memset(objects, 0, sizeof(objects));
+ 	session_ready = 0;
+ 	rxbuf_len = 0;
+@@ -3948,9 +3923,6 @@ void upsdrv_initinfo(void)
+ 	 * need that. */
+ 	microlink_configured_poll_interval = poll_interval;
+ 
+-#ifdef WITH_USB
+-	microlink_guard_deadline_begin();
+-#endif /* WITH_USB */
+ 	if (microlink_start_session()) {
+ 		microlink_ready = 1;
+ 		while (microlink_ready && !microlink_startup_ready()) {
+@@ -4069,7 +4041,6 @@ void upsdrv_updateinfo(void)
+ 					"reappears", (long)(now - microlink_fallback_since));
+ 			reopening = 1;
+ 			if (microlink_usb_reset_and_reopen()) {
+-				microlink_guard_deadline_begin();
+ 				microlink_start_session();
+ 			}
+ 		} else if (microlink_fallback_retries > 0 && microlink_fallback_retries % 64 == 0) {
+@@ -4080,9 +4051,6 @@ void upsdrv_updateinfo(void)
+ #endif
+ 
+ 		if (!reopening) {
+-#ifdef WITH_USB
+-			microlink_guard_deadline_begin();
+-#endif /* WITH_USB */
+ 			microlink_start_session_impl(1);
+ 		}
+ 

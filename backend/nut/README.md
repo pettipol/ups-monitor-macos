@@ -16,6 +16,9 @@ only, with cooperative termination partially qualified and concurrency open.
 The fourth incremental [async-state patch](../../docs/NUT_ASYNC_STATE_CANDIDATE.md)
 synchronizes three shared scalar flags. It does not qualify the complete
 listener lifecycle, cancellation, or real hardware.
+The fifth incremental [observation-budget patch](../../docs/NUT_GUARD_DEADLINE_CANDIDATE.md)
+adds one nonrenewable guarded IN budget. It is cooperative, not a hard process
+deadline or hardware qualification.
 
 | File | Scope |
 |---|---|
@@ -25,6 +28,8 @@ listener lifecycle, cancellation, or real hardware.
 | `nut-hid-fallback-validation-73c4502.patch` | Offline candidate for truncated HID fields and wall-clock rollback; combined merged-guard builds checked separately; hardware untested |
 | `nut-guarded-lifecycle-write-73c4502.patch` | Incremental patch over merged guard/HID: exact write completion and partial cooperative cancellation; not hardware-qualified |
 | `nut-usb-async-state-73c4502.patch` | Incremental patch over lifecycle/write: three mutex-protected scalar flags; broader lifecycle remains open |
+| `nut-usb-guard-deadline-73c4502.patch` | Fifth incremental patch: one monotonic guarded IN budget; lifecycle and real hardware remain open |
+| `replay_usb_guard_deadline.py`, `test_usb_guard_deadline.c`, `test_replay_usb_guard_deadline.py` | Pinned helper/callback experiment and separate static call-site checks; no driver or hardware execution |
 | `replay_usb_async_state.py`, `test_usb_async_state.c`, `test_replay_usb_async_state.py` | Pinned extracted-source concurrency experiment and synthetic runner contracts; no driver or hardware execution |
 | `check_upsc_completion.py` | Actual client test with an ephemeral synthetic loopback server |
 | `test_guarded_policy.c` | Compiled policy-header tests with fake callbacks, no libusb |
@@ -76,13 +81,17 @@ fallback validation patch target
 `73c4502191d025e35122463986a80c676e734b04`. The lifecycle/write patch layers
 on that merged guard/HID combination; the async-state patch layers on the
 lifecycle/write candidate and changes only `drivers/apcmicrolink-usb.c`.
-All six patch artifacts follow
+The observation-budget patch adds changes to `drivers/apcmicrolink-usb.c`,
+`drivers/apcmicrolink-usb.h` and `drivers/apcmicrolink.c` over that exact stack.
+All seven patch artifacts follow
 **GPL-2.0-or-later** according to the affected upstream source headers. The
 guarded policy C test and HID fallback validation C test carry their own GPL
 SPDX identifiers. The HID fallback replay C test is also GPL-2.0-or-later.
 The new signal and USB write C harnesses likewise carry GPL-2.0-or-later SPDX.
 The async-state C harness also carries GPL-2.0-or-later SPDX; its Python runner
 and synthetic runner tests are original MIT material.
+The observation-budget C harness also carries GPL-2.0-or-later SPDX; its
+Python runner and runner-contract tests are original MIT material.
 Generated excerpts preserve upstream copyright/GPL notices and are not checked
 in. None of these artifacts is relicensed by the application's MIT license.
 The Python replay runners, source-fence tests and merged-rebase checker are MIT
@@ -107,7 +116,7 @@ alone is not a finding of legal noncompliance.
 source checkout. Its SHA-256 is recorded in `THIRD_PARTY_NOTICES.md`.
 `COPYING.NUT` is NUT's licensing overview: it describes license families in
 the full upstream tree and is not itself the complete GPL text. This
-repository contains six patch artifacts and synthetic C tests, not the
+repository contains seven patch artifacts and synthetic C tests, not the
 complete NUT source tree or NUT/libusb binaries. The standalone HID fragment
 replay is not a full-driver build; the separate combined build evidence does
 not establish driver runtime or hardware behavior.
