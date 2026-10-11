@@ -15,8 +15,10 @@ each qualification run. This list does not claim hardware compatibility.
 | libusb | 1.0.30 | Optional NUT USB dependency; [release](https://github.com/libusb/libusb/releases/tag/v1.0.30) |
 
 NUT is an independent upstream project with its own licensing requirements.
-The two patches in `backend/nut/` retain GPL-2.0-or-later licensing and apply
-to the exact experimental revision above; see that directory's README.
+The original two patches in `backend/nut/` retain GPL-2.0-or-later licensing
+and apply to the exact experimental revision above. A separately named
+guarded rebase targets `73c4502191d025e35122463986a80c676e734b04`; see that
+directory's README for the distinct pins and qualification boundaries.
 No NUT source is relicensed under the application's MIT license.
 Other package dependencies must be reviewed and recorded before adoption.
 
@@ -40,10 +42,16 @@ explicit exception, not a stable dependency or bundled binary.
 
 On 2026-10-11 the official latest-release records still identify NUT 2.8.5
 and libusb 1.0.30. The observed NUT master has advanced to
-`73c4502191d025e35122463986a80c676e734b04`, now admitted only as the third
+`73c4502191d025e35122463986a80c676e734b04`, initially admitted as the third
 exact source pin in the [offline HID replay](NUT_HID_REPLAY.md). This does
 not change the original full-driver/patch baseline in the table above.
 The guarded patch does not apply unchanged to the new master; see the
 [upstream review](NUT_UPSTREAM_STATUS.md). No new runtime dependency or
 driver binary has been adopted. Other toolchain versions were not refreshed
 by this bounded NUT review and need rechecking before another release.
+
+The subsequent same-day [guarded rebase](NUT_GUARDS_MERGED.md) adds a separately
+named patch and offline USB/serial build evidence for that exact master.
+The original patch and its source pin remain unchanged. These binaries were
+not executed, installed, bundled or published; this is not adoption of a live
+backend or a new stable NUT release.

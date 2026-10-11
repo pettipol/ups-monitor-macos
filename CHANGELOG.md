@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a separately pinned guarded NUT patch for merged master `73c4502`,
+  preserving upstream padding, calibration and HID fallback corrections.
+  Offline source/policy checks and USB/serial builds pass; no driver execution
+  or hardware qualification. The original patch remains unchanged.
+- Added a static merged-rebase preservation checker with six mutation checks,
+  separate from normal app CI and real protocol testing.
 - Added a third exact source pin to the offline NUT HID fallback replay after
   upstream PRs #3714 and #3728 merged. Source-fence coverage now includes all
   three pins. Hardware compatibility and the full-driver baseline are unchanged.

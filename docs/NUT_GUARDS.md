@@ -4,6 +4,10 @@ Status: **offline prototype, hardware NOT_RUN, live consent HOLD**. No candidate
 driver, scanner, daemon, service, USB handle, or UPS was run or opened in this
 work. This document does not identify or qualify a target model.
 
+This page preserves the original v2 evidence against `1a8369f`. A separately
+named [merged-master rebase](NUT_GUARDS_MERGED.md) targets `73c4502`; its evidence
+does not retroactively change these source files or results.
+
 ## Provenance
 
 `backend/nut/nut-guarded-monitor.patch` applies to Network UPS Tools commit

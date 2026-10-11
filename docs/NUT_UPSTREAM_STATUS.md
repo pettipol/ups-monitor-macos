@@ -21,13 +21,17 @@ Local Git ancestry confirms both merges are included. The three-revision
 the two synthetic residuals below remain. This is not a full-driver test.
 NUT stable remains 2.8.5 and libusb stable remains 1.0.30 at this check.
 
-The guarded patch and full-driver qualification baseline remain on `1a8369f`.
-A non-mutating `git apply --check` of that patch against the new master fails
+The original guarded patch and its qualification baseline remain on `1a8369f`.
+A non-mutating `git apply --check` of that original patch against the new master fails
 at the frame-parser context changed by #3714. Do not force-apply it or reuse
 the old guard evidence for the new source. A reviewed offline rebase and
-renewed guard tests are required before even considering a new candidate.
+renewed guard tests were required before considering a new candidate.
 The upstream changes do not remove USB opening/claim, STOP/INIT/NEXT tunnel
-messages, or cleanup traffic. No new driver was built or run in this refresh.
+messages, or cleanup traffic. No new driver was built or run during that
+research refresh. The subsequent same-day [guarded rebase](NUT_GUARDS_MERGED.md)
+provides a separately named patch, renewed static/policy checks and USB/serial
+build evidence. Neither resulting driver binary was run. This does not promote
+the candidate to a production backend or qualify live hardware.
 
 [PR #3719](https://github.com/networkupstools/nut/pull/3719) remains open and
 unmerged. Its serial and control-command changes must not be attributed to

@@ -1,7 +1,8 @@
 # Third-Party Notices
 
 This inventory reflects the repository and build configuration reviewed on
-2026-10-08. It is not a legal opinion or a complete scan of future changes.
+2026-10-08, with the additional offline guarded rebase recorded on 2026-10-11.
+It is not a legal opinion or a complete scan of future changes.
 
 ## Code and Build Inputs
 
@@ -9,9 +10,11 @@ This inventory reflects the repository and build configuration reviewed on
 |---|---|
 | Original UPS Monitor Mac source and documentation | MIT, as stated in [`LICENSE`](LICENSE). The notice does not relicense identified third-party material. |
 | `backend/nut/nut-guarded-monitor.patch` and `test_guarded_policy.c` | GPL-2.0-or-later, following the affected NUT source headers; the C test carries its own SPDX identifier. |
+| `backend/nut/nut-guarded-monitor-73c4502.patch` | GPL-2.0-or-later; alternative guarded patch against exact NUT revision `73c4502191d025e35122463986a80c676e734b04`, not an application MIT file. |
 | `backend/nut/nut-upsc-completion.patch` | GPL-2.0-or-later based on upstream `clients/upsc.c` and `clients/upsclient.c` headers. It is an unsubmitted patch against NUT, not an application MIT file. |
 | `backend/nut/test_hid_fallback_replay.c` and generated NUT excerpts | GPL-2.0-or-later; generated excerpts retain upstream copyright and GPL notices. Exact source revisions/digests are in the replay runner; generated files are external, not bundled. |
 | `backend/nut/replay_hid_fallback.py` and `test_replay_hid_fallback.py` | Original MIT-licensed offline source extraction and synthetic source-fence helpers. |
+| `backend/nut/check_guarded_merged_rebase.py` | Original MIT-licensed static preservation checker; no full-driver or hardware execution. |
 | `backend/nut/LICENSE-GPL2` | Complete GPL version 2 text copied from the pinned NUT source checkout; byte hash is recorded below. |
 | `backend/nut/check_upsc_completion.py`, `process_deadline.py` and their Python tests | Identified by `backend/nut/README.md` as original project/MIT helpers; they use synthetic fixtures and are not the app's NUT driver. |
 | NUT source and `libusb` | Built only in an external workbench for offline qualification. Neither the NUT source tree, libusb, nor their compiled binaries are included in this application repository or current app bundle. |
@@ -26,7 +29,7 @@ licensing overview: it says most NUT files are GPL-2.0-or-later and describes
 other license families present in the full upstream tree. It is not itself
 the complete GPL text; the applicable GPL version 2 text for the identified
 patches is included as `backend/nut/LICENSE-GPL2`. This repository contains
-the two patches and C tests, not the entire upstream NUT tree. The
+the three patches and C tests, not the entire upstream NUT tree. The
 patches are not submitted or accepted upstream. No NUT or libusb binary is
 currently distributed here.
 
