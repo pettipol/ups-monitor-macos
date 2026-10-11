@@ -11,6 +11,11 @@
 - Added a third exact source pin to the offline NUT HID fallback replay after
   upstream PRs #3714 and #3728 merged. Source-fence coverage now includes all
   three pins. Hardware compatibility and the full-driver baseline are unchanged.
+- Added a separately pinned merged-master HID fallback validation candidate.
+  Exact RED on pristine source and GREEN on the candidate passed the bounded
+  extracted-source replay; 13 synthetic Python runner-contract tests are wired
+  into local validation. No full-driver build, hosted-CI result, or hardware
+  qualification is claimed.
 - Prevented the stored-history range picker's visible title from wrapping in
   the compact controls row; its accessibility group label remains available.
 - Recorded bounded production Apple-reader and history-export observations.

@@ -26,9 +26,9 @@ stops at a fake test marker, without starting the full validation sequence.
 
 The script runs, in order:
 
-1. Python standard-library process and offline replay source-fence tests under
-   `backend/nut`, plus privacy-declaration regressions and source plist checks
-   under `scripts`.
+1. Python standard-library process, offline replay source-fence, merged-pin
+   HID candidate-runner contract, and privacy-declaration tests, followed by
+   source privacy-manifest checks.
 2. The complete Swift package test suite with `swift test`.
 3. A Swift release build with `swift build -c release`.
 4. `plutil -lint` over the Xcode project, app/widget plists, privacy manifests
@@ -80,3 +80,12 @@ permissions, user-interface quality, widget installation/rendering, App Group
 runtime access, or notification presentation. Those remain separate gates in
 the release checklist. The script does not perform a native power-source probe
 or launch the application.
+
+The merged-pin HID candidate-runner contract tests use synthetic temporary
+checkouts and mocked subprocess results. They cover candidate/source fences,
+scratch-path refusal, extract-only behavior, and exact RED/GREEN output
+contracts; they do not compile or execute the C harness, inspect a NUT build,
+or contact hardware. Their current count is 13 tests. Together with the
+existing 11 process-deadline, 7 original replay-source-fence, and 14 privacy
+tests, the Python test groups run by this entry point total 45. This is a
+local suite count, not a new hosted-CI result.

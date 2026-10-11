@@ -118,6 +118,12 @@ corrective revision only in its revision comment. This confirms continuity
 of the bounded fallback fix; the replay does not exercise #3714's padding
 scanner hook, calibration map, full startup, concurrency, or USB lifecycle.
 
+A separate [merged-pin HID candidate replay](NUT_HID_VALIDATION.md) then
+passed its exact-pristine RED and exact-candidate GREEN contracts. It covers
+only extracted fallback/getter/publisher fragments with synthetic reports,
+clock and recording stubs. This does not build the complete NUT driver or
+qualify hardware, USB coexistence, measurement accuracy, or shutdown behavior.
+
 ## Qualification Boundary
 
 An existing [SMC1500I USB report in #1426](https://github.com/networkupstools/nut/issues/1426)

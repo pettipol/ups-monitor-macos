@@ -122,3 +122,8 @@ The Python source-fence tests run through `scripts/check.sh` and hosted CI
 without an external NUT checkout. Normal validation does not fetch pinned
 source or execute the compiled replay. The extracted upstream fragments and C
 test are GPL-2.0-or-later; the Python runner and source-fence tests are MIT.
+
+The separate [merged-pin candidate validation](NUT_HID_VALIDATION.md) adds a
+bounded RED/GREEN replay for the local truncated-field and clock-rollback
+candidate. It does not change the three-revision results above, and is not a
+full-driver or hardware qualification.

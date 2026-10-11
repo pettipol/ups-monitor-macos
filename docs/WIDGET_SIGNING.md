@@ -151,3 +151,37 @@ gallery because accessibility attempts returned `illegalArgument` and
 rendering, interaction, refresh behavior, appearance or accessibility result was
 verified. No claim that the widget was running or that the product release gates
 passed follows from this observation.
+
+### Registry Selection Follow-Up
+
+A later read-only check on 2026-10-11 compared the default `pluginkit` match
+with `-A` (all versions) and `-D` (all physical instances), using the installed
+manual's definitions. The default query returned one older ad-hoc Release
+copy. `-A` returned the current signed SharedRelease copy. `-D` returned 15
+development instances, including a synthetic fixture and other builds. Their
+visible short-version/build fields were the same; the reason for the differing
+selection was not established.
+
+The initial inference that one `-A` result meant there were no competing copies
+was incorrect. Neither that query nor valid signatures prove which extension
+the widget gallery or host will select. No registration was changed and no
+shared container was directly inspected during this check. Registry correction
+and an actual gallery/rendering check remain open. The running production host
+still showed fresh Apple data, history off, and no visible sharing-error message;
+this is not proof of a successful widget read.
+
+### Authorized Registry Correction
+
+After explicit consent on 2026-10-11, the coordinator verified all 15 bundle
+identifiers, the running production app path, its `NO` fixture setting and its
+deep/strict signature. Only the 14 older copies of this project's widget were
+removed from the plug-in registry with `pluginkit -r`; the currently running
+signed app's embedded extension was registered with `pluginkit -a`.
+No files, app data, other widgets or system-process lifecycles were changed.
+
+The default, `-A` and `-D` queries then each returned exactly the same single
+current signed extension. This is point-in-time registry evidence, not a
+guarantee against automatic rediscovery of development copies that still exist
+on disk. The installed manual explicitly warns that discovery may add removed
+registrations back. No installed widget rendering or shared-container read was
+established; the gallery remains a separate qualification gate.

@@ -92,6 +92,8 @@ printf '\n== Python synthetic process tests ==\n'
 
 printf '\n== Offline replay source-fence tests ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_fallback.py' -v
+printf '\n== Merged-pin HID candidate runner contract tests ==\n'
+"$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_hid_validation.py' -v
 
 printf '\n== Privacy declaration and packaging regressions ==\n'
 "$PYTHON_BIN" -m unittest discover -s scripts -p 'test_privacy_manifest.py' -v

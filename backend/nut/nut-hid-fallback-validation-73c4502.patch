@@ -1,0 +1,111 @@
+# Experimental GPL-covered NUT source patch. Not application MIT code.
+# Network UPS Tools base commit: 73c4502191d025e35122463986a80c676e734b04
+# Provenance: upstream NUT source; GPL-2.0-or-later per source headers.
+# Offline-only validation candidate; no driver or USB interface was opened.
+
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+index 6ceb1b97c..a736551fb 100644
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -37,6 +37,7 @@
+ #include <unistd.h>
+ #include <time.h>
+ #include <sys/time.h>
++#include <limits.h>
+ #ifdef HAVE_PTHREAD
+ #include <pthread.h>
+ #endif /* HAVE_PTHREAD */
+@@ -808,6 +809,24 @@ static unsigned long hid_extract_bits(const unsigned char *data, size_t data_len
+ 	return value;
+ }
+ 
++/* A short matching report is not evidence for a zero-valued field. Validate
++ * the whole descriptor field before extracting or refreshing its cache. */
++static int hid_field_fits_report(const hid_fallback_field_t *field, size_t data_len)
++{
++	int end_bit;
++	size_t required_bytes;
++
++	if (field == NULL || field->report_id == 0 || field->offset < 0
++	 || field->size < 1 || field->size > 32
++	 || field->offset > INT_MAX - field->size) {
++		return 0;
++	}
++
++	end_bit = field->offset + field->size;
++	required_bytes = (size_t)(end_bit / 8) + ((end_bit % 8) != 0);
++	return required_bytes <= data_len;
++}
++
+ /* Decode the standard HID PDC fallback fields if this report happens to be one
+  * of them - called for every Input report seen, since these arrive
+  * autonomously and independently of tunnel health. */
+@@ -824,22 +843,27 @@ static void microlink_usb_try_decode_fallback(const unsigned char *report, size_
+ 	data = report + 1;
+ 	data_len = report_len - 1;
+ 
+-	if (ff_ac_present.report_id == report_id) {
++	if (ff_ac_present.report_id == report_id
++	 && hid_field_fits_report(&ff_ac_present, data_len)) {
+ 		fb_ac_present = (int)hid_extract_bits(data, data_len, ff_ac_present.offset, ff_ac_present.size);
+ 		fb_ac_present_update = microlink_now();
+ 	}
+-	if (ff_discharging.report_id == report_id) {
++	if (ff_discharging.report_id == report_id
++	 && hid_field_fits_report(&ff_discharging, data_len)) {
+ 		fb_discharging = (int)hid_extract_bits(data, data_len, ff_discharging.offset, ff_discharging.size);
+ 		fb_discharging_update = microlink_now();
+ 	}
+-	if (ff_below_rcl.report_id == report_id) {
++	if (ff_below_rcl.report_id == report_id
++	 && hid_field_fits_report(&ff_below_rcl, data_len)) {
+ 		fb_below_rcl = (int)hid_extract_bits(data, data_len, ff_below_rcl.offset, ff_below_rcl.size);
+ 	}
+-	if (ff_remaining_capacity.report_id == report_id) {
++	if (ff_remaining_capacity.report_id == report_id
++	 && hid_field_fits_report(&ff_remaining_capacity, data_len)) {
+ 		fb_battery_charge = (long)hid_extract_bits(data, data_len,
+ 			ff_remaining_capacity.offset, ff_remaining_capacity.size);
+ 	}
+-	if (ff_runtime_to_empty.report_id == report_id) {
++	if (ff_runtime_to_empty.report_id == report_id
++	 && hid_field_fits_report(&ff_runtime_to_empty, data_len)) {
+ 		fb_battery_runtime = (long)hid_extract_bits(data, data_len,
+ 			ff_runtime_to_empty.offset, ff_runtime_to_empty.size);
+ 	}
+@@ -1091,6 +1115,8 @@ int microlink_usb_get_hid_fallback(int max_age_sec,
+ 	int *ac_present, int *discharging, int *below_rcl,
+ 	long *battery_charge, long *battery_runtime)
+ {
++	time_t now;
++
+ 	if (ff_ac_present.report_id == 0 || ff_discharging.report_id == 0) {
+ 		return 0;
+ 	}
+@@ -1099,12 +1125,24 @@ int microlink_usb_get_hid_fallback(int max_age_sec,
+ 	pthread_mutex_lock(&async_lock);
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
++	now = microlink_now();
++	if (fb_ac_present_update > now || fb_discharging_update > now) {
++		/* Require both status fields to be observed again after a wall-clock
++		 * rollback; otherwise the old pair could become fresh on catch-up. */
++		fb_ac_present_update = 0;
++		fb_discharging_update = 0;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++		pthread_mutex_unlock(&async_lock);
++#endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
++		return 0;
++	}
++
+ 	/* Both status flags must have been decoded from a real report, and
+ 	 * recently: the caller turns them into OL/OB, which upsmon acts upon. */
+ 	if (fb_ac_present_update == 0 || fb_discharging_update == 0
+ 	 || max_age_sec < 0
+-	 || difftime(microlink_now(), fb_ac_present_update) > (double)max_age_sec
+-	 || difftime(microlink_now(), fb_discharging_update) > (double)max_age_sec) {
++	 || difftime(now, fb_ac_present_update) > (double)max_age_sec
++	 || difftime(now, fb_discharging_update) > (double)max_age_sec) {
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 		pthread_mutex_unlock(&async_lock);
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
