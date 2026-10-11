@@ -22,6 +22,10 @@ deadline or hardware qualification.
 The separate [lifecycle observation](../../docs/NUT_LIFECYCLE_OBSERVATION.md)
 executes selected unchanged candidate functions with deterministic local mocks.
 It observes pending-transfer teardown gaps; it does not patch or qualify them.
+The sixth incremental [ownership candidate](../../docs/NUT_OWNER_RETENTION_CANDIDATE.md)
+retains unresolved transfer generations and gates close/reopen and synchronous
+fallback. Its public integration tool only extracts source and a synthetic
+fixture; it never compiles or runs them. Real USB and process exit remain open.
 
 | File | Scope |
 |---|---|
@@ -32,6 +36,8 @@ It observes pending-transfer teardown gaps; it does not patch or qualify them.
 | `nut-guarded-lifecycle-write-73c4502.patch` | Incremental patch over merged guard/HID: exact write completion and partial cooperative cancellation; not hardware-qualified |
 | `nut-usb-async-state-73c4502.patch` | Incremental patch over lifecycle/write: three mutex-protected scalar flags; broader lifecycle remains open |
 | `nut-usb-guard-deadline-73c4502.patch` | Fifth incremental patch: one monotonic guarded IN budget; lifecycle and real hardware remain open |
+| `nut-usb-owner-retention-73c4502.patch` | Sixth incremental patch over the five-patch stack: generation ownership and backend context hold; not hardware-qualified |
+| `extract_usb_owner_retention.py`, `test_usb_owner_retention.c`, `test_extract_usb_owner_retention.py` | Pinned extract-only integration fixture and synthetic Python contracts; no driver, compiler or C execution by the extractor |
 | `replay_usb_guard_deadline.py`, `test_usb_guard_deadline.c`, `test_replay_usb_guard_deadline.py` | Pinned helper/callback experiment and separate static call-site checks; no driver or hardware execution |
 | `replay_usb_lifecycle_observation.py`, `test_usb_lifecycle_observation.c`, `test_replay_usb_lifecycle_observation.py` | Source-extracted start/stop/callback/close observation with local mocks and separate Python runner contracts; not real thread scheduling or driver execution |
 | `replay_usb_async_state.py`, `test_usb_async_state.c`, `test_replay_usb_async_state.py` | Pinned extracted-source concurrency experiment and synthetic runner contracts; no driver or hardware execution |
@@ -87,7 +93,9 @@ on that merged guard/HID combination; the async-state patch layers on the
 lifecycle/write candidate and changes only `drivers/apcmicrolink-usb.c`.
 The observation-budget patch adds changes to `drivers/apcmicrolink-usb.c`,
 `drivers/apcmicrolink-usb.h` and `drivers/apcmicrolink.c` over that exact stack.
-All seven patch artifacts follow
+The ownership-retention patch adds changes to `drivers/apcmicrolink-usb.c`,
+`drivers/apcmicrolink-usb.h`, `drivers/libusb1.c` and `drivers/nut_libusb.h`.
+All eight patch artifacts follow
 **GPL-2.0-or-later** according to the affected upstream source headers. The
 guarded policy C test and HID fallback validation C test carry their own GPL
 SPDX identifiers. The HID fallback replay C test is also GPL-2.0-or-later.
@@ -98,6 +106,8 @@ The observation-budget C harness also carries GPL-2.0-or-later SPDX; its
 Python runner and runner-contract tests are original MIT material.
 The lifecycle-observation C harness is GPL-2.0-or-later; its Python runner and
 synthetic runner tests are original MIT material.
+The ownership-retention C fixture is GPL-2.0-or-later; its Python extractor
+and synthetic contract tests are original MIT material.
 Generated excerpts preserve upstream copyright/GPL notices and are not checked
 in. None of these artifacts is relicensed by the application's MIT license.
 The Python replay runners, source-fence tests and merged-rebase checker are MIT
@@ -122,7 +132,7 @@ alone is not a finding of legal noncompliance.
 source checkout. Its SHA-256 is recorded in `THIRD_PARTY_NOTICES.md`.
 `COPYING.NUT` is NUT's licensing overview: it describes license families in
 the full upstream tree and is not itself the complete GPL text. This
-repository contains seven patch artifacts and synthetic C tests, not the
+repository contains eight patch artifacts and synthetic C tests, not the
 complete NUT source tree or NUT/libusb binaries. The standalone HID fragment
 replay is not a full-driver build; the separate combined build evidence does
 not establish driver runtime or hardware behavior.

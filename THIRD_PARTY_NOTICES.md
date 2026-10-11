@@ -17,6 +17,8 @@ It is not a legal opinion or a complete scan of future changes.
 | `backend/nut/replay_usb_async_state.py`, `test_replay_usb_async_state.py` | Original MIT runner and synthetic contracts; no driver execution. |
 | `backend/nut/nut-usb-guard-deadline-73c4502.patch`, `test_usb_guard_deadline.c` and generated excerpts | GPL-2.0-or-later; incremental NUT-derived patch, synthetic C test and excerpts retaining upstream notices; [scope](docs/NUT_GUARD_DEADLINE_CANDIDATE.md). |
 | `backend/nut/replay_usb_guard_deadline.py`, `test_replay_usb_guard_deadline.py` | Original MIT runner and synthetic contracts; no driver execution. |
+| `backend/nut/nut-usb-owner-retention-73c4502.patch`, `test_usb_owner_retention.c` and generated excerpts | GPL-2.0-or-later; sixth incremental NUT-derived candidate and synthetic fixture; generated excerpts preserve both source copyright/GPL notices. [Scope and hashes](docs/NUT_OWNER_RETENTION_CANDIDATE.md). |
+| `backend/nut/extract_usb_owner_retention.py`, `test_extract_usb_owner_retention.py` | Original MIT extract-only tool and synthetic contracts; no compilation or C/driver execution. |
 | `backend/nut/nut-upsc-completion.patch` | GPL-2.0-or-later based on upstream `clients/upsc.c` and `clients/upsclient.c` headers. It is an unsubmitted patch against NUT, not an application MIT file. |
 | `backend/nut/test_hid_fallback_replay.c` and generated NUT excerpts | GPL-2.0-or-later; generated excerpts retain upstream copyright and GPL notices. Exact source revisions/digests are in the replay runner; generated files are external, not bundled. |
 | `backend/nut/test_hid_fallback_validation.c` and generated NUT excerpts | GPL-2.0-or-later; the test carries its own SPDX identifier and extracted fragments retain upstream copyright/GPL notices. Generated files are external, not bundled. |
@@ -39,7 +41,7 @@ licensing overview: it says most NUT files are GPL-2.0-or-later and describes
 other license families present in the full upstream tree. It is not itself
 the complete GPL text; the applicable GPL version 2 text for the identified
 patches is included as `backend/nut/LICENSE-GPL2`. This repository contains
-seven patches and synthetic C tests, not the entire upstream NUT tree. The
+eight patches and synthetic C tests, not the entire upstream NUT tree. The
 patches are not submitted or accepted upstream. The HID validation candidate
 is not integrated into the application backend. Its separate combination with
 the merged guarded patch has offline source/build evidence only, not runtime
@@ -56,6 +58,11 @@ for `upsclient.c`), Arnaud Quette (2012), Arjen de Korte (2008), and Jim Klimov
 Schmid and Nicolai Brogaard (2026). These are provenance/attribution facts
 observed in the pinned source headers; this notice makes no independent legal
 determination.
+
+The ownership candidate also changes `drivers/libusb1.c` (Eaton and Arnaud
+Quette, 2016; Jim Klimov, 2021-2024) and `drivers/nut_libusb.h` (Arnaud Quette,
+2003-2016; Peter Selinger, 2005; Jim Klimov, 2021). Their headers state GPL
+version 2 or later; those original headers are preserved in the patched source.
 
 ## Review Items Before Distribution
 

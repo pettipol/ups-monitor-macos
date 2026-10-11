@@ -5,6 +5,11 @@ hardware test was run for this review. The five-patch source and exact hashes
 are frozen in [the observation-budget candidate](NUT_GUARD_DEADLINE_CANDIDATE.md).
 Line numbers below refer to that patched NUT source, not pristine upstream.
 
+Subsequent work: the separate [sixth ownership-retention candidate](NUT_OWNER_RETENTION_CANDIDATE.md)
+addresses these frozen-source findings and records bounded synthetic evidence.
+The findings below remain the historical five-patch review, not a review of
+that later source. The live driver and protocol qualification remain on hold.
+
 **The local experimental driver remains unqualified.** Its observation budget
 does not establish safe transfer ownership through startup failure, reconnect
 and process shutdown. This does not prevent separate Apple-reader/app/widget

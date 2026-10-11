@@ -1,0 +1,901 @@
+diff --git a/drivers/apcmicrolink-usb.c b/drivers/apcmicrolink-usb.c
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -17,8 +17,8 @@
+  * can go several seconds between replies, and a synchronous read only listens
+  * while the driver happens to be blocked waiting on one. Only the pump thread
+  * may call libusb_handle_events*() on this context. Builds without libusb-1.0
+- * or pthreads, and any failure to start the listener, fall back to a
+- * synchronous per-call read (microlink_usb_get_char_sync()).
++ * or pthreads, and failures before a successful async submission, fall back
++ * to a synchronous per-call read (microlink_usb_get_char_sync()).
+  *
+  * Copyright (C)
+  *   2026 Lukas Schmid <lukas.schmid@netcube.li>
+@@ -131,10 +131,23 @@
+ 	size_t len;
+ } microlink_async_report_t;
+ 
+-/* The transfer buffer is heap-allocated per instance: an abandoned transfer
+- * (see microlink_usb_async_stop()) has to be left to free itself, so a
+- * listener started in the meantime must not be sharing that buffer. */
+-static struct libusb_transfer *async_xfer = NULL;
++/* One heap generation owns every object libusb may still reference. It is
++ * released by the main thread only after both terminal callback and pump-exit
++ * acknowledgements. */
++typedef struct microlink_async_owner {
++	struct libusb_transfer *transfer;
++	unsigned char *buffer;
++	usb_dev_handle *device;
++	libusb_context *context;
++	int submit_done;
++	int submit_result;
++	int stop_requested;
++	int cancel_requested;
++	int callback_terminal;
++	int pump_exited;
++} microlink_async_owner_t;
++
++static microlink_async_owner_t *async_owner = NULL;
+ static int async_xfer_active = 0;	/* 1 while a transfer is submitted/outstanding */
+ 
+ /* Shared queue, transfer state and fallback values are protected by
+@@ -158,7 +171,28 @@
+ /* Keeps libusb's event loop serviced so the outstanding transfer is reaped and
+  * resubmitted promptly. */
+ static pthread_t async_pump_tid;
+-static int async_pump_stop = 0;
++static int async_pending_get_locked(void)
++{
++	return async_owner != NULL && async_owner->stop_requested;
++}
++
++static int microlink_usb_async_owner_exists(void)
++{
++	int exists;
++	pthread_mutex_lock(&async_lock);
++	exists = async_owner != NULL;
++	pthread_mutex_unlock(&async_lock);
++	return exists;
++}
++
++static int microlink_usb_async_pending(void)
++{
++	int pending;
++	pthread_mutex_lock(&async_lock);
++	pending = async_pending_get_locked();
++	pthread_mutex_unlock(&async_lock);
++	return pending;
++}
+ 
+ static int microlink_usb_guard_remaining_ms_locked(unsigned int *remaining_ms)
+ {
+@@ -298,34 +332,21 @@
+ 	return active;
+ }
+ 
+-static void microlink_usb_async_xfer_active_set(int active)
++/* Defined below microlink_usb_try_decode_fallback(), which the transfer
++ * callback calls. */
++static int microlink_usb_async_start(void);
++static int microlink_usb_async_stop(void);
++#else
++static int microlink_usb_async_owner_exists(void)
+ {
+-	pthread_mutex_lock(&async_lock);
+-	async_xfer_active = active;
+-	pthread_mutex_unlock(&async_lock);
++	return 0;
+ }
+ 
+-static int microlink_usb_async_pump_stop_get(void)
++static int microlink_usb_async_pending(void)
+ {
+-	int stop;
+-	pthread_mutex_lock(&async_lock);
+-	stop = async_pump_stop;
+-	pthread_mutex_unlock(&async_lock);
+-	return stop;
+-}
+-
+-static void microlink_usb_async_pump_stop_set(int stop)
+-{
+-	pthread_mutex_lock(&async_lock);
+-	async_pump_stop = stop;
+-	pthread_mutex_unlock(&async_lock);
++	return 0;
+ }
+ 
+-/* Defined below microlink_usb_try_decode_fallback(), which the transfer
+- * callback calls. */
+-static int microlink_usb_async_start(void);
+-static void microlink_usb_async_stop(void);
+-#else
+ int microlink_usb_guard_begin(long seconds)
+ {
+ 	(void)seconds;
+@@ -647,6 +668,12 @@
+ {
+ 	char *regex_array[USBMATCHER_REGEXP_ARRAY_LIMIT];
+ 	int ret;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	int async_ret;
++#endif
++	if (microlink_usb_async_owner_exists()) {
++		return 0;
++	}
+ 	guarded_monitor = testvar("guarded_monitor");
+ 
+ #if WITH_LIBUSB_0_1
+@@ -719,7 +746,11 @@
+ 	in_report_pos = 0;
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+-	if (!microlink_usb_async_start()) {
++	async_ret = microlink_usb_async_start();
++	if (async_ret <= 0) {
++		if (async_ret < 0) {
++			return 0;
++		}
+ 		if (guarded_monitor) {
+ 			microlink_usb_guard_invalidate();
+ 			return 0;
+@@ -735,7 +766,9 @@
+ void microlink_usb_close(void)
+ {
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+-	microlink_usb_async_stop();
++	if (!microlink_usb_async_stop()) {
++		return;
++	}
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
+ 	if (udev) {
+@@ -768,6 +801,9 @@
+ int microlink_usb_reset_and_reopen(void)
+ {
+ 	int ret;
++#if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	int async_ret;
++#endif
+ 	if (guarded_monitor && microlink_usb_guard_expired()) {
+ 		return 0;
+ 	}
+@@ -775,7 +811,9 @@
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	/* Cancel the outstanding async transfer before resetting and closing
+ 	 * the handle it is submitted against. */
+-	microlink_usb_async_stop();
++	if (!microlink_usb_async_stop()) {
++		return 0;
++	}
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
+ 	if (udev) {
+@@ -822,7 +860,11 @@
+ 		curDevice.VendorID, curDevice.ProductID);
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+-	if (!microlink_usb_async_start()) {
++	async_ret = microlink_usb_async_start();
++	if (async_ret <= 0) {
++		if (async_ret < 0) {
++			return 0;
++		}
+ 		if (guarded_monitor) {
+ 			microlink_usb_guard_invalidate();
+ 			return 0;
+@@ -851,6 +893,9 @@
+ 	unsigned char discard[MLINK_USB_REPORT_TOTAL_LEN];
+ 	int ret;
+ 	unsigned int drained;
++	if (microlink_usb_async_pending()) {
++		return;
++	}
+ 
+ 	in_report_len = 0;
+ 	in_report_pos = 0;
+@@ -858,8 +903,11 @@
+ 	if (!udev) {
+ 		return;
+ 	}
+-
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
++	if (microlink_usb_async_owner_exists()
++	 && !microlink_usb_async_xfer_active_get()) {
++		return;
++	}
+ 	/* Guarded mode never falls back to a synchronous endpoint read. */
+ 	pthread_mutex_lock(&async_lock);
+ 	if (guard_requested) {
+@@ -874,9 +922,9 @@
+ 	}
+ 	pthread_mutex_unlock(&async_lock);
+ 
+-	if (microlink_usb_async_xfer_active_get()) {
+-		/* The async listener owns the interrupt-IN endpoint, and its pump
+-		 * thread already services the event loop continuously, so just drop
++	if (microlink_usb_async_owner_exists()) {
++		/* A retained listener owns the interrupt-IN endpoint even when its
++		 * last callback has cleared active state, so just drop
+ 		 * whatever is queued. This function must never call
+ 		 * libusb_handle_events*() itself - that would make it a second caller
+ 		 * of the event loop.
+@@ -970,6 +1018,9 @@
+ {
+ 	unsigned char raw_buf[MLINK_USB_REPORT_TOTAL_LEN];
+ 	int ret;
++	if (microlink_usb_async_pending()) {
++		return 0;
++	}
+ 
+ 	if (!udev || mlink_report_out == 0) {
+ 		return 0;
+@@ -1119,298 +1170,328 @@
+ }
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+-/* Keeps libusb's event loop serviced so async_xfer is reaped and resubmitted
+- * promptly, independent of what the main thread is doing. Nothing else may
+- * call libusb_handle_events*() on this context while this thread runs. */
+-static void *microlink_usb_async_pump(void *arg)
+-{
+-	NUT_UNUSED_VARIABLE(arg);
+-
+-	while (!microlink_usb_async_pump_stop_get()) {
+-		struct timeval tv;
+-
+-		tv.tv_sec = 0;
+-		tv.tv_usec = 50000; /* 50ms - bounds how fast a stop request is noticed */
+-		libusb_handle_events_timeout_completed(nut_libusb_get_context(), &tv, NULL);
+-	}
+-
+-	return NULL;
+-}
+-
+-/* Runs on the pump thread from inside libusb_handle_events*(). Queues the
+- * completed report and immediately resubmits the same transfer, so exactly one
+- * interrupt-IN request stays outstanding at all times.
+- *
+- * transfer->user_data doubles as an "abandoned" marker (see
+- * microlink_usb_async_stop()): libusb forbids freeing a transfer before its
+- * callback has fired, so an abandoned one frees itself here instead of ever
+- * resubmitting. */
++/* Event dispatch normally runs on the pump; synchronous main-thread libusb
++ * calls may also dispatch this callback. The main thread cannot reap while
++ * its own synchronous call is in flight. `user_data` remains immutable until
++ * the transfer is freed after both acknowledgements. */
+ static void LIBUSB_CALL microlink_usb_async_cb(struct libusb_transfer *transfer)
+ {
+-	int abandoned = (transfer->user_data != NULL);
++	microlink_async_owner_t *owner =
++		(microlink_async_owner_t *)transfer->user_data;
+ 	unsigned int timeout_ms;
+-
+-	if (abandoned) {
+-		free(transfer->buffer);
+-		libusb_free_transfer(transfer);
+-		return;
+-	}
++	size_t copy_len;
++	int submit_result;
+ 
+ 	pthread_mutex_lock(&async_lock);
+-	if (microlink_usb_guard_expired_locked()) {
++	if (owner->stop_requested
++	 || transfer->status == LIBUSB_TRANSFER_CANCELLED
++	 || transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
++		if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
++			usb_device_gone = 1;
++		}
++		owner->callback_terminal = 1;
+ 		async_xfer_active = 0;
+ 		pthread_cond_broadcast(&async_cond);
+ 		pthread_mutex_unlock(&async_lock);
+ 		return;
+ 	}
+-	pthread_mutex_unlock(&async_lock);
+ 
+-	if (transfer->status == LIBUSB_TRANSFER_COMPLETED && transfer->actual_length > 0) {
+-		size_t copy_len = (size_t)transfer->actual_length;
+-
++	if (transfer->status == LIBUSB_TRANSFER_COMPLETED
++	 && transfer->actual_length > 0
++	 && !microlink_usb_guard_expired_locked()) {
++		copy_len = (size_t)transfer->actual_length;
+ 		if (copy_len > MLINK_USB_REPORT_TOTAL_LEN) {
+ 			copy_len = MLINK_USB_REPORT_TOTAL_LEN;
+ 		}
+-
+-		upsdebugx(4, "microlink_usb: async transfer completed: report 0x%02X, "
+-			"%u bytes",
+-			copy_len > 0 ? (unsigned int)transfer->buffer[0] : 0U,
+-			(unsigned int)copy_len);
+-
+-		/* Decoded on receipt whether or not this also turns out to be our own
+-		 * tunnel reply; the fb_* globals are read by the main thread in
+-		 * microlink_usb_get_hid_fallback(), hence the lock. */
+-		pthread_mutex_lock(&async_lock);
+-		if (microlink_usb_guard_expired_locked()) {
+-			async_xfer_active = 0;
+-			pthread_cond_broadcast(&async_cond);
+-			pthread_mutex_unlock(&async_lock);
+-			return;
+-		}
+-
+ 		microlink_usb_try_decode_fallback(transfer->buffer, copy_len);
+-
+ 		if (async_queue_count < MLINK_USB_ASYNC_QUEUE_LEN) {
+-			unsigned int slot = (async_queue_head + async_queue_count) % MLINK_USB_ASYNC_QUEUE_LEN;
+-
++			unsigned int slot = (async_queue_head + async_queue_count)
++				% MLINK_USB_ASYNC_QUEUE_LEN;
+ 			memcpy(async_queue[slot].data, transfer->buffer, copy_len);
+ 			async_queue[slot].len = copy_len;
+ 			async_queue_count++;
+ 			pthread_cond_signal(&async_cond);
+-		} else {
+-			upsdebugx(3, "microlink_usb: async read queue full (%u), dropping "
+-				"incoming report", MLINK_USB_ASYNC_QUEUE_LEN);
+ 		}
+-
+-		pthread_mutex_unlock(&async_lock);
+ 	}
+ 
+-#ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+-#pragma GCC diagnostic push
+-#endif
+-#ifdef HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_SWITCH_DEFAULT
+-#pragma GCC diagnostic ignored "-Wswitch-default"
+-#endif
+-#ifdef __clang__
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wswitch-default"
+-#endif
+-	switch (transfer->status) {
+-	case LIBUSB_TRANSFER_CANCELLED:
+-	case LIBUSB_TRANSFER_NO_DEVICE:
+-		/* Teardown in progress, or the device is gone - don't resubmit;
+-		 * microlink_usb_async_stop() frees this transfer once it observes
+-		 * async_xfer_active go to 0. */
+-		if (transfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+-			microlink_usb_device_gone_set(1);
+-		}
+-		pthread_mutex_lock(&async_lock);
++	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		owner->callback_terminal = 1;
+ 		async_xfer_active = 0;
+ 		pthread_cond_broadcast(&async_cond);
+ 		pthread_mutex_unlock(&async_lock);
+ 		return;
+-	case LIBUSB_TRANSFER_COMPLETED:
+-	case LIBUSB_TRANSFER_ERROR:
+-	case LIBUSB_TRANSFER_TIMED_OUT:
+-	case LIBUSB_TRANSFER_STALL:
+-	case LIBUSB_TRANSFER_OVERFLOW:
+-		/* Resubmit below and keep listening. */
+-		break;
+ 	}
+-#ifdef __clang__
+-#pragma clang diagnostic pop
+-#endif
+-#ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+-#pragma GCC diagnostic pop
+-#endif
+-
++	/* This reservation is the resubmit linearization point. A concurrent stop
++	 * remains pending until this call returns and the pump can cancel it. */
++	transfer->timeout = timeout_ms;
++	pthread_mutex_unlock(&async_lock);
++	submit_result = libusb_submit_transfer(transfer);
+ 	pthread_mutex_lock(&async_lock);
+-	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++	if (submit_result != 0) {
++		owner->callback_terminal = 1;
+ 		async_xfer_active = 0;
++	} else {
++		async_xfer_active = 1;
++	}
++	pthread_cond_broadcast(&async_cond);
++	pthread_mutex_unlock(&async_lock);
++}
++
++/* The detached pump owns initial submit, cancellation, and the explicit event
++ * loop. Synchronous main-thread libusb calls may also dispatch callbacks. */
++static void *microlink_usb_async_pump(void *arg)
++{
++	microlink_async_owner_t *owner = (microlink_async_owner_t *)arg;
++	unsigned int timeout_ms;
++	int submit_result;
++
++	pthread_mutex_lock(&async_lock);
++	if (owner->stop_requested
++	 || !microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++		owner->submit_result = -1;
++		owner->submit_done = 1;
++		owner->callback_terminal = 1;
+ 		pthread_cond_broadcast(&async_cond);
+ 		pthread_mutex_unlock(&async_lock);
+-		return;
++		goto pump_exit;
+ 	}
++	/* This reservation is the initial-submit linearization point. A concurrent
++	 * stop remains pending until this API call returns and is then canceled. */
++	owner->transfer->timeout = timeout_ms;
+ 	pthread_mutex_unlock(&async_lock);
+-	transfer->timeout = timeout_ms;
+-	if (libusb_submit_transfer(transfer) != 0) {
+-		upsdebugx(1, "microlink_usb: failed to resubmit async interrupt-IN "
+-			"transfer, continuous listener stopped");
++	submit_result = libusb_submit_transfer(owner->transfer);
++	pthread_mutex_lock(&async_lock);
++	owner->submit_result = submit_result;
++	owner->submit_done = 1;
++	if (submit_result == 0) {
++		async_xfer_active = 1;
++	} else {
++		owner->callback_terminal = 1;
++	}
++	pthread_cond_broadcast(&async_cond);
++	pthread_mutex_unlock(&async_lock);
++
++	for (;;) {
++		int stop_requested, active, terminal;
+ 		pthread_mutex_lock(&async_lock);
+-		async_xfer_active = 0;
+-		pthread_cond_broadcast(&async_cond);
++		stop_requested = owner->stop_requested;
++		active = async_xfer_active;
++		terminal = owner->callback_terminal;
++		if (terminal || !active) {
++			pthread_mutex_unlock(&async_lock);
++			break;
++		}
++		if (stop_requested && !owner->cancel_requested) {
++			owner->cancel_requested = 1;
++			pthread_mutex_unlock(&async_lock);
++			(void)libusb_cancel_transfer(owner->transfer);
++			continue;
++		}
+ 		pthread_mutex_unlock(&async_lock);
++
++		{
++			struct timeval tv;
++			tv.tv_sec = 0;
++			tv.tv_usec = 50000;
++			(void)libusb_handle_events_timeout_completed(owner->context,
++				&tv, NULL);
++		}
+ 	}
++
++	pump_exit:
++	/* No transfer/callback can be active once event dispatch returned with
++	 * terminal state. This final ack uses only static synchronization. */
++	pthread_mutex_lock(&async_lock);
++	owner->pump_exited = 1;
++	pthread_cond_broadcast(&async_cond);
++	pthread_mutex_unlock(&async_lock);
++	return NULL;
+ }
+ 
+-/* Start the listener and its pump thread. Returns 1 if running (or already
+- * was), 0 if it could not be started; default mode may fall back to per-call
+- * synchronous reads, while guarded mode treats this as fatal. */
++static int microlink_usb_async_reap_locked(void)
++{
++	microlink_async_owner_t *owner = async_owner;
++	if (!owner || !owner->callback_terminal || !owner->pump_exited) {
++		return 0;
++	}
++	async_owner = NULL;
++	async_xfer_active = 0;
++	async_queue_head = 0;
++	async_queue_count = 0;
++	/* Both acknowledgements are final; only the main thread can reap or
++	 * start a generation. No libusb call needs the shared lock here. */
++	pthread_mutex_unlock(&async_lock);
++	free(owner->buffer);
++	libusb_free_transfer(owner->transfer);
++	nut_libusb_context_release();
++	free(owner);
++	pthread_mutex_lock(&async_lock);
++	return 1;
++}
++
++/* A finite number of short relative pauses is an observation budget, not a
++ * deadline guarantee. The shared lock is never held while waiting. */
++static int microlink_usb_async_wait_ack(microlink_async_owner_t *owner,
++	int wait_for_submit)
++{
++	unsigned int i;
++	int acknowledged;
++
++	for (i = 0; i < 100U; i++) {
++		pthread_mutex_lock(&async_lock);
++		acknowledged = wait_for_submit ? owner->submit_done
++			: (owner->callback_terminal && owner->pump_exited);
++		pthread_mutex_unlock(&async_lock);
++		if (acknowledged) {
++			return 1;
++		}
++		(void)usleep(10000U);
++	}
++	pthread_mutex_lock(&async_lock);
++	acknowledged = wait_for_submit ? owner->submit_done
++		: (owner->callback_terminal && owner->pump_exited);
++	pthread_mutex_unlock(&async_lock);
++	return acknowledged;
++}
++
+ static int microlink_usb_async_start(void)
+ {
+-	int ep_in;
+-	unsigned char *buf;
++	microlink_async_owner_t *owner;
++	pthread_attr_t attr;
++	int thread_created = 0;
++	int ep_in, attr_ok = 0;
+ 	unsigned int timeout_ms;
+ 
+ 	if (!udev) {
+ 		return 0;
+ 	}
+-	if (microlink_usb_async_xfer_active_get()) {
+-		return 1;
+-	}
+ 	pthread_mutex_lock(&async_lock);
++	if (async_owner) {
++		int running = !async_owner->stop_requested && async_xfer_active;
++		pthread_mutex_unlock(&async_lock);
++		return running ? 1 : -1;
++	}
+ 	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
+ 		pthread_mutex_unlock(&async_lock);
+ 		return 0;
+ 	}
+ 	pthread_mutex_unlock(&async_lock);
+ 
+-	ep_in = USB_ENDPOINT_IN + usb_subdriver.hid_ep_in;
+-
+-	/* Heap-allocated per instance - see async_xfer's declaration. */
+-	buf = (unsigned char *)xmalloc(MLINK_USB_REPORT_TOTAL_LEN);
+-
+-	async_xfer = libusb_alloc_transfer(0);
+-	if (!async_xfer) {
+-		upsdebugx(1, "microlink_usb: libusb_alloc_transfer failed for the "
+-			"async listener");
+-		free(buf);
++	owner = (microlink_async_owner_t *)calloc(1, sizeof(*owner));
++	if (!owner) {
+ 		return 0;
+ 	}
+-
+-	pthread_mutex_lock(&async_lock);
+-	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
+-		pthread_mutex_unlock(&async_lock);
+-		libusb_free_transfer(async_xfer);
+-		free(buf);
+-		async_xfer = NULL;
++	owner->buffer = (unsigned char *)malloc(MLINK_USB_REPORT_TOTAL_LEN);
++	owner->transfer = libusb_alloc_transfer(0);
++	if (!owner->buffer || !owner->transfer) {
++		free(owner->buffer);
++		if (owner->transfer) libusb_free_transfer(owner->transfer);
++		free(owner);
+ 		return 0;
+ 	}
+-	pthread_mutex_unlock(&async_lock);
++	owner->device = udev;
++	owner->context = nut_libusb_get_context();
++	if (!owner->context) {
++		free(owner->buffer);
++		libusb_free_transfer(owner->transfer);
++		free(owner);
++		return 0;
++	}
++	ep_in = USB_ENDPOINT_IN + usb_subdriver.hid_ep_in;
++	libusb_fill_interrupt_transfer(owner->transfer, owner->device, ep_in,
++		owner->buffer, (int)MLINK_USB_REPORT_TOTAL_LEN,
++		microlink_usb_async_cb, owner, timeout_ms);
+ 
+-	/* Timeout 0 remains the unbounded default-mode behavior. Guarded transfers
+-	 * instead carry the remaining observation budget. user_data starts NULL ("owned");
+-	 * microlink_usb_async_stop() sets it to mark the transfer abandoned. */
+-	libusb_fill_interrupt_transfer(async_xfer, udev, ep_in,
+-		buf, (int)MLINK_USB_REPORT_TOTAL_LEN,
+-		microlink_usb_async_cb, NULL, timeout_ms);
+-
+ 	pthread_mutex_lock(&async_lock);
+-	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++	if (async_owner || !microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
+ 		pthread_mutex_unlock(&async_lock);
+-		libusb_free_transfer(async_xfer);
+-		free(buf);
+-		async_xfer = NULL;
++		free(owner->buffer);
++		libusb_free_transfer(owner->transfer);
++		free(owner);
+ 		return 0;
+ 	}
++	owner->transfer->timeout = timeout_ms;
++	async_owner = owner;
++	async_xfer_active = 0;
++	async_queue_head = 0;
++	async_queue_count = 0;
++	nut_libusb_context_hold();
+ 	pthread_mutex_unlock(&async_lock);
+-	async_xfer->timeout = timeout_ms;
+ 
+-	if (libusb_submit_transfer(async_xfer) != 0) {
+-		upsdebugx(1, "microlink_usb: failed to submit the initial async "
+-			"interrupt-IN transfer");
+-		libusb_free_transfer(async_xfer);
+-		free(buf);
+-		async_xfer = NULL;
++	if (pthread_attr_init(&attr) == 0) {
++		if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0) {
++			attr_ok = 1;
++		}
++		if (attr_ok && pthread_create(&async_pump_tid, &attr,
++			microlink_usb_async_pump, owner) == 0) {
++			thread_created = 1;
++		}
++		pthread_attr_destroy(&attr);
++	}
++	if (!thread_created) {
++		pthread_mutex_lock(&async_lock);
++		async_owner = NULL;
++		nut_libusb_context_release();
++		pthread_mutex_unlock(&async_lock);
++		free(owner->buffer);
++		libusb_free_transfer(owner->transfer);
++		free(owner);
+ 		return 0;
+ 	}
+ 
+-	async_queue_head = 0;
+-	async_queue_count = 0;
+-	microlink_usb_async_xfer_active_set(1);
+-
+-	microlink_usb_async_pump_stop_set(0);
+-	if (pthread_create(&async_pump_tid, NULL, microlink_usb_async_pump, NULL) != 0) {
+-		upsdebugx(1, "microlink_usb: failed to start the async pump thread, "
+-			"abandoning the just-submitted transfer and falling back to "
+-			"synchronous reads");
+-		/* Nothing will service the event loop until some later synchronous
+-		 * call incidentally does, so request cancellation now and then walk
+-		 * away exactly like the timeout path in microlink_usb_async_stop()
+-		 * below. */
+-		libusb_cancel_transfer(async_xfer);
+-		async_xfer->user_data = (void *)1;
+-		async_xfer = NULL;
+-		microlink_usb_async_xfer_active_set(0);
+-		async_queue_head = 0;
+-		async_queue_count = 0;
++	/* Startup result is observed with a finite relative wait budget. */
++	if (!microlink_usb_async_wait_ack(owner, 1)) {
++		pthread_mutex_lock(&async_lock);
++		owner->stop_requested = 1;
++		pthread_cond_broadcast(&async_cond);
++		pthread_mutex_unlock(&async_lock);
++		return -1;
++	}
++	pthread_mutex_lock(&async_lock);
++	if (owner->submit_result != 0) {
++		pthread_mutex_unlock(&async_lock);
++		if (!microlink_usb_async_wait_ack(owner, 0)) {
++			pthread_mutex_lock(&async_lock);
++			owner->stop_requested = 1;
++			pthread_cond_broadcast(&async_cond);
++			pthread_mutex_unlock(&async_lock);
++			return -1;
++		}
++		pthread_mutex_lock(&async_lock);
++		microlink_usb_async_reap_locked();
++		pthread_mutex_unlock(&async_lock);
+ 		return 0;
+ 	}
+-
+-	upsdebugx(2, "microlink_usb: continuous async interrupt-IN listener started");
++	pthread_mutex_unlock(&async_lock);
+ 	return 1;
+ }
+ 
+-/* Stop the pump thread first; once it has exited, this function is again the
+- * only thing that might touch libusb's event loop.
+- *
+- * Freeing a transfer libusb has not yet reported as complete or cancelled is
+- * undefined behavior (observed live as a "usbi_mutex_lock" assertion crash
+- * during a USB reset), so cancel it and wait, bounded, for confirmation. If
+- * the bound is hit - realistically only when the device is already too wedged
+- * to answer a cancel, i.e. exactly what leads here - mark the transfer
+- * abandoned via user_data and let its callback free it whenever libusb
+- * eventually completes it. Never touch it again after that. */
+-static void microlink_usb_async_stop(void)
++/* QUIESCENT is returned only after callback and pump acknowledgements. A
++ * pending generation retains every referenced object and rejects reuse. */
++static int microlink_usb_async_stop(void)
+ {
+-	int i;
++	int quiescent;
+ 
+-	if (!async_xfer) {
+-		return;
++	pthread_mutex_lock(&async_lock);
++	if (!async_owner) {
++		pthread_mutex_unlock(&async_lock);
++		return 1;
+ 	}
+-
+-	microlink_usb_async_pump_stop_set(1);
+-	pthread_join(async_pump_tid, NULL);
+-
+-	if (microlink_usb_async_xfer_active_get()) {
+-		libusb_cancel_transfer(async_xfer);
+-
+-		for (i = 0; i < 50 && microlink_usb_async_xfer_active_get(); i++) {
+-			struct timeval tv;
+-
+-			tv.tv_sec = 0;
+-			tv.tv_usec = 20000;
+-			libusb_handle_events_timeout_completed(nut_libusb_get_context(), &tv, NULL);
+-		}
+-
+-		if (microlink_usb_async_xfer_active_get()) {
+-			upsdebugx(1, "microlink_usb: async transfer did not confirm "
+-				"cancellation in time, abandoning it (it will free itself "
+-				"once libusb eventually completes it)");
+-			async_xfer->user_data = (void *)1;
+-			async_xfer = NULL;
+-			microlink_usb_async_xfer_active_set(0);
+-			async_queue_head = 0;
+-			async_queue_count = 0;
+-			return;
+-		}
++	async_owner->stop_requested = 1;
++	pthread_cond_broadcast(&async_cond);
++	{
++		microlink_async_owner_t *owner = async_owner;
++		pthread_mutex_unlock(&async_lock);
++		quiescent = microlink_usb_async_wait_ack(owner, 0);
++		pthread_mutex_lock(&async_lock);
+ 	}
+-
+-	free(async_xfer->buffer);
+-	libusb_free_transfer(async_xfer);
+-	async_xfer = NULL;
+-	async_queue_head = 0;
+-	async_queue_count = 0;
++	if (!quiescent) {
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
++	quiescent = microlink_usb_async_reap_locked();
++	pthread_mutex_unlock(&async_lock);
++	return quiescent;
+ }
+ #endif /* WITH_LIBUSB_1_0 && HAVE_PTHREAD */
+ 
+@@ -1518,6 +1599,10 @@
+ 	int ret;
+ 	usb_ctrl_timeout_msec timeout_ms;
+ 
++	if (microlink_usb_async_owner_exists()) {
++		return -1;
++	}
++
+ 	if (!udev || mlink_report_in == 0) {
+ 		return -1;
+ 	}
+@@ -1591,6 +1676,10 @@
+ 	int expired;
+ 
+ 	pthread_mutex_lock(&async_lock);
++	if (async_owner && (async_owner->stop_requested || !async_xfer_active)) {
++		pthread_mutex_unlock(&async_lock);
++		return -1;
++	}
+ 	guarded = guard_requested;
+ 	expired = guarded ? microlink_usb_guard_expired_locked() : 0;
+ 	if (guarded && (expired || !async_xfer_active)) {
+@@ -1599,6 +1688,9 @@
+ 	}
+ 	pthread_mutex_unlock(&async_lock);
+ 	if (!guarded && !microlink_usb_async_xfer_active_get()) {
++		if (microlink_usb_async_owner_exists()) {
++			return -1;
++		}
+ 		return microlink_usb_get_char_sync(ch, d_usec);
+ 	}
+ 
+@@ -1646,6 +1738,7 @@
+ 	}
+ 
+ 	while (async_queue_count == 0
++	 && !async_pending_get_locked()
+ 	 && (!guarded || async_xfer_active)
+ 	 && (!guarded || !microlink_usb_guard_expired_locked())) {
+ 		if (pthread_cond_timedwait(&async_cond, &async_lock, &deadline) != 0) {
+@@ -1655,6 +1748,10 @@
+ 			return 0;
+ 		}
+ 	}
++	if (async_pending_get_locked()) {
++		pthread_mutex_unlock(&async_lock);
++		return -1;
++	}
+ 	if ((guarded && microlink_usb_guard_expired_locked()) || async_queue_count == 0) {
+ 		pthread_mutex_unlock(&async_lock);
+ 		return 0;
+diff --git a/drivers/apcmicrolink-usb.h b/drivers/apcmicrolink-usb.h
+--- a/drivers/apcmicrolink-usb.h
++++ b/drivers/apcmicrolink-usb.h
+@@ -36,7 +36,10 @@
+  * failure returns 0 so the caller can fail after driver cleanup is registered. */
+ int microlink_usb_open(void);
+ 
+-/* Close the USB device and release matcher/device string resources. */
++/* Request listener stop, then close the USB device and release matcher/device
++ * strings only after the async transfer callback and pump exit are observed.
++ * If stop remains pending, retain the complete USB generation and leave the
++ * device open; later I/O/reopen attempts fail closed. */
+ void microlink_usb_close(void);
+ 
+ /* Discard any not-yet-consumed bytes from the last received HID report,
+diff --git a/drivers/libusb1.c b/drivers/libusb1.c
+--- a/drivers/libusb1.c
++++ b/drivers/libusb1.c
+@@ -93,6 +93,9 @@
+  */
+ static libusb_context	*nut_usb_ctx = NULL;
+ static nut_bool_t	 nut_usb_ctx_initialized = false;
++/* Main-thread-only: a retained async-transfer generation makes context exit
++ * unsafe. The driver sets/clears this before submit and after quiescence. */
++static int nut_usb_ctx_held = 0;
+ 
+ static int nut_libusb_guarded_monitor(void)
+ {
+@@ -157,6 +160,11 @@
+  */
+ static void nut_libusb_cleanup_atexit(void)
+ {
++	/* Preserve the context if cleanup returned while a transfer was pending.
++	 * This intentionally favors retained process resources over unsafe exit. */
++	if (nut_usb_ctx_held) {
++		return;
++	}
+ 	if (!nut_usb_ctx_initialized || !nut_usb_ctx) {
+ 		return;
+ 	}
+@@ -188,6 +196,16 @@
+ libusb_context *nut_libusb_get_context(void)
+ {
+ 	return nut_usb_ctx_initialized ? nut_usb_ctx : NULL;
++}
++
++void nut_libusb_context_hold(void)
++{
++	nut_usb_ctx_held = 1;
++}
++
++void nut_libusb_context_release(void)
++{
++	nut_usb_ctx_held = 0;
+ }
+ 
+ static void nut_libusb_close(libusb_device_handle *udev);
+diff --git a/drivers/nut_libusb.h b/drivers/nut_libusb.h
+--- a/drivers/nut_libusb.h
++++ b/drivers/nut_libusb.h
+@@ -122,6 +122,11 @@
+ /* Defined in libusb1.c only - the libusb-0.1 backend has no equivalent
+  * context object to hand out. See its definition for the intended use. */
+ libusb_context *nut_libusb_get_context(void);
++/* Single-owner, main-thread-only retention gate for driver-owned asynchronous
++ * transfers; this is an idempotent flag, not a reference count. The atexit
++ * handler skips libusb_exit while held. */
++void nut_libusb_context_hold(void);
++void nut_libusb_context_release(void);
+ #endif /* WITH_LIBUSB_1_0 */
+ 
+ #endif /* NUT_LIBUSB_H_SEEN */

@@ -103,6 +103,8 @@ printf '\n== Offline USB observation-budget runner contracts ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_usb_guard_deadline.py' -v
 printf '\n== Offline USB lifecycle observation runner contracts ==\n'
 "$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_replay_usb_lifecycle_observation.py' -v
+printf '\n== Offline USB ownership extraction contracts ==\n'
+"$PYTHON_BIN" -m unittest discover -s backend/nut -p 'test_extract_usb_owner_retention.py' -v
 
 printf '\n== Privacy declaration and packaging regressions ==\n'
 "$PYTHON_BIN" -m unittest discover -s scripts -p 'test_privacy_manifest.py' -v

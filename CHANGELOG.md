@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a sixth, offline NUT ownership-retention candidate with exact source
+  hashes and an extract-only integration fixture. Pending transfers retain
+  their resources instead of enabling close/reopen or synchronous fallback.
+  Synthetic evidence is separate from real USB, protocol and process-exit
+  qualification. Updated primary-source protocol research; hardware remains
+  on hold and the installed app is unchanged.
+
 - Shortened Apple widget titles when a complete recognized firmware/ID suffix
   is present. The full sanitized name remains in accessibility labels, help,
   the app and the widget payload. Other providers and unrecognized names are
