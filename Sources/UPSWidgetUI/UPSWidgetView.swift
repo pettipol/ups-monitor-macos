@@ -57,12 +57,18 @@ public struct UPSWidgetView: View {
                     Text(UPSWidgetPresentation.headerLabel(
                         providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
                         isSyntheticFixture: isSyntheticFixture,
-                        presentationName: payload?.presentationName
+                        presentationName: payload?.presentationName,
+                        sourceProvider: snapshot.source.provider
                     ))
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                         .accessibilityLabel(UPSWidgetPresentation.accessibilityHeaderLabel(
+                            providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                            isSyntheticFixture: isSyntheticFixture,
+                            presentationName: payload?.presentationName
+                        ))
+                        .help(UPSWidgetPresentation.accessibilityHeaderLabel(
                             providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
                             isSyntheticFixture: isSyntheticFixture,
                             presentationName: payload?.presentationName
@@ -96,12 +102,18 @@ public struct UPSWidgetView: View {
             Text(UPSWidgetPresentation.headerLabel(
                 providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
                 isSyntheticFixture: isSyntheticFixture,
-                presentationName: payload?.presentationName
+                presentationName: payload?.presentationName,
+                sourceProvider: snapshot.source.provider
             ))
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
                 .accessibilityLabel(UPSWidgetPresentation.accessibilityHeaderLabel(
+                    providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                    isSyntheticFixture: isSyntheticFixture,
+                    presentationName: payload?.presentationName
+                ))
+                .help(UPSWidgetPresentation.accessibilityHeaderLabel(
                     providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
                     isSyntheticFixture: isSyntheticFixture,
                     presentationName: payload?.presentationName
@@ -196,6 +208,10 @@ public struct UPSWidgetView: View {
 }
 
 enum UPSWidgetPresentation {
+    private static let technicalNameSuffix = try? NSRegularExpression(
+        pattern: #"\A(.+?) FW:UPS [0-9]+(?:\.[0-9]+)+ / ID=[0-9]+\z"#
+    )
+
     static let mediumMetricIDs: [MonitorMetricID] = [
         .batteryRuntime, .upsLoad, .upsRealPower,
         .inputVoltage, .outputVoltage, .upsApparentPower,
@@ -216,18 +232,30 @@ enum UPSWidgetPresentation {
     }
 
     static func headerLabel(providerLabel: String, isSyntheticFixture: Bool,
-                            presentationName: String? = nil) -> String {
+                            presentationName: String? = nil,
+                            sourceProvider: MonitorProvider? = nil) -> String {
         if isSyntheticFixture { return "Synthetic UPS" }
         guard let name = UPSMonitorFormatters.presentationName(presentationName) else {
             return "UPS · \(providerLabel)"
         }
-        return "\(name) · \(providerLabel)"
+        let visibleName = sourceProvider == .apple ? compactAppleName(name) ?? name : name
+        return "\(visibleName) · \(providerLabel)"
     }
 
     static func accessibilityHeaderLabel(providerLabel: String, isSyntheticFixture: Bool,
                                          presentationName: String? = nil) -> String {
         headerLabel(providerLabel: providerLabel, isSyntheticFixture: isSyntheticFixture,
                     presentationName: presentationName)
+    }
+
+    private static func compactAppleName(_ name: String) -> String? {
+        let fullRange = NSRange(name.startIndex..<name.endIndex, in: name)
+        guard let match = technicalNameSuffix?.firstMatch(in: name, range: fullRange),
+              let prefixRange = Range(match.range(at: 1), in: name) else { return nil }
+        let prefix = String(name[prefixRange])
+        guard !prefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              prefix == prefix.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        return prefix
     }
 
     static func stateLabel(payload: WidgetSnapshot?, date: Date, unavailableReason: String? = nil) -> String {

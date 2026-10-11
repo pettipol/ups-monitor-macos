@@ -108,6 +108,17 @@ light-mode app layout, other window sizes, the menu-bar popover, actual history
 and exports, notifications, backend settings and installed-widget interaction
 remain unqualified. The preview never publishes to the shared widget cache.
 
+## Compact Apple Name Preview (2026-10-11)
+
+![Compact Apple title with synthetic partial readings and an explicit fixture banner](images/widget-medium-compact-name-offscreen.png)
+
+The fixture's full name includes a firmware/ID suffix; the visible medium title
+omits it while preserving the provider. This unedited ImageRenderer output is
+658 x 370 pixels, including the 30-point synthetic banner. Missing metrics are
+intentional. Root inspected the small and medium variants; only the medium
+is shown here. This is not a desktop widget screenshot, and the future fixture
+date versus host-relative date limitation still applies.
+
 ## Asset License
 
 The project mark is an original MIT-licensed vector asset. It is a repository

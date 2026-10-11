@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Shortened Apple widget titles when a complete recognized firmware/ID suffix
+  is present. The full sanitized name remains in accessibility labels, help,
+  the app and the widget payload. Other providers and unrecognized names are
+  unchanged. Added focused tests and two explicitly synthetic render cases.
+
 - Added a pinned source-extracted USB lifecycle observation: six expected RED
   pending-transfer/close cases and two completion controls with local mocks.
   Runner contracts join normal CI; C observations are separate and offline.

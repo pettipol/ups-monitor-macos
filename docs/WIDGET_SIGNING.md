@@ -326,3 +326,33 @@ check could read file metadata, but macOS denied content access; no alternative
 access method or permission change was attempted. Thus actual extension reads,
 the named medium widget's desktop appearance and refresh timing remain open.
 No driver, HID interface, power setting or system process was touched.
+
+### User Confirmation And Compact Title (2026-10-11)
+
+The user subsequently confirmed that the desktop widget displays the correct
+native UPS name, but found the technical suffix too long. This is user-reported
+evidence of name delivery, not a new screenshot, refresh-timing test or advanced
+telemetry qualification. It supersedes only the earlier uncertainty about
+whether the native name appeared on the desktop.
+
+The widget now removes a complete recognized `FW:UPS <version> / ID=<number>`
+suffix from the visible title for Apple sources only. The full sanitized value
+is unchanged in the payload, app, accessibility label and help text. Incomplete
+or unrecognized suffixes and other providers retain their original labels.
+The new compact title still requires confirmation in the system-hosted widget;
+source tests and synthetic renders are separate evidence.
+
+The compact-title update passed 275 Swift tests and 108 Python tests, with two
+optional NUT client interop tests skipped. Package Release, ad-hoc app/widget and
+locally signed SharedRelease builds, signature and privacy-packaging checks
+passed. Both signed bundles have fixture mode disabled and the previously
+authorized group. The host was replaced through normal Quit/open operations;
+its full native label, Apple backend and history-off state were preserved.
+
+A registry check selected an older development widget. Under the existing
+scoped consent, five stale registrations for this widget identifier alone were
+removed and the current signed extension registered. Default and all-copy
+queries then showed only the new copy; no bundle/data deletion or system
+process restart occurred. WidgetKit still reported one medium widget. These
+checks do not establish that the visible desktop widget has reloaded the new
+compact title or prove real-time freshness.

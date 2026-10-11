@@ -150,6 +150,11 @@ private struct UPSRenderProbe {
         )
         let partialPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
                                             maximumAge: 30, snapshot: partialSnapshot)
+        let compactTitlePayload = WidgetSnapshot(
+            publishedAt: capturedAt, acquisition: .active, maximumAge: 30,
+            snapshot: partialSnapshot,
+            presentationName: "Synthetic Tower 1500 FW:UPS 9.9 / ID=9999"
+        )
 
         let menu = UPSMenuContentView(
             sources: [staleSnapshot],
@@ -214,6 +219,16 @@ private struct UPSRenderProbe {
                                    scenario: "widget-small-named-inset16-banner40",
                                    payload: namedSmallPayload, medium: false, bodyWidth: 180,
                                    bodyHeight: 180, bannerHeight: 40, scheme: "light",
+                                   capturedAt: capturedAt, presentationDate: freshDate),
+            namedFixtureWidgetCase(file: "widget-small-compact-apple-title.png",
+                                   scenario: "widget-small-compact-apple-title-banner40",
+                                   payload: compactTitlePayload, medium: false, bodyWidth: 180,
+                                   bodyHeight: 180, bannerHeight: 40, scheme: "light",
+                                   capturedAt: capturedAt, presentationDate: freshDate),
+            namedFixtureWidgetCase(file: "widget-medium-compact-apple-title.png",
+                                   scenario: "widget-medium-compact-apple-title-banner30",
+                                   payload: compactTitlePayload, medium: true, bodyWidth: 329,
+                                   bodyHeight: 155, bannerHeight: 30, scheme: "dark",
                                    capturedAt: capturedAt, presentationDate: freshDate),
             viewCase(file: "menu-light-single-source-stale.png", scenario: "menu-light-single-source-stale",
                      width: 300, height: 260, scheme: "light", capturedAt: capturedAt,

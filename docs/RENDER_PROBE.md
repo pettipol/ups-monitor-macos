@@ -21,7 +21,7 @@ synthetic PNG images plus a JSON manifest. Choose a dedicated location for each
 run; the helper never overwrites or cleans up prior output. It accepts no data
 source, snapshot file, app configuration, or arbitrary scenario arguments.
 
-The current source matrix contains fourteen chosen canvases:
+The current source matrix contains sixteen chosen canvases:
 
 | File | Scenario | Canvas |
 |---|---|---:|
@@ -36,6 +36,8 @@ The current source matrix contains fourteen chosen canvases:
 | `widget-medium-named-short.png` | named medium, short synthetic name, inset 16 points, plus 30-point synthetic-fixture banner | 329 x 185 points |
 | `widget-medium-named-long.png` | named medium, 64-character synthetic name, inset 16 points, plus 30-point synthetic-fixture banner | 329 x 185 points |
 | `widget-small-named.png` | named small, short synthetic name, inset 16 points, plus wrapping 40-point synthetic-fixture banner | 180 x 220 points |
+| `widget-small-compact-apple-title.png` | Apple name with recognized technical suffix, compact visible title, 40-point synthetic-fixture banner | 180 x 220 points |
+| `widget-medium-compact-apple-title.png` | same compact Apple title, partial readings, dark, 30-point synthetic-fixture banner | 329 x 185 points |
 | `menu-light-single-source-stale.png` | single-source menu with stale synthetic capture | 300 x 260 points |
 | `energy-light-paused-missing.png` | input estimate paused; UPS channel missing | 420 x 220 points |
 | `energy-dark-large-two-channels.png` | two channels with very large synthetic estimates | 420 x 240 points |
@@ -113,3 +115,13 @@ the long medium and small names were abbreviated with an ellipsis. The small
 canvas still has the documented unsupported-control placeholder and abbreviated
 footer. No automated pixel or VoiceOver checks were run. These remain offscreen
 synthetic previews, not installed WidgetKit appearance or accessibility proof.
+
+### Compact Apple Title (2026-10-11)
+
+A subsequent run produced sixteen images. The two added cases use the complete
+synthetic name `Synthetic Tower 1500 FW:UPS 9.9 / ID=9999` and an Apple fixture.
+Root visually inspected both: the medium title shows `Synthetic Tower 1500`
+and its provider without the technical suffix, with no observed overlap. The
+small title still abbreviates the end of its provider and its footer; the
+documented unsupported-control placeholder remains. This is not a WidgetKit
+or VoiceOver test. No real reading is present in these images.
