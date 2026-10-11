@@ -8,6 +8,13 @@ public enum AppleSnapshotRuntimeError: Error, Equatable {
 }
 
 public enum AppleSnapshotRuntimeAdapter {
+    public static func readings(from session: AppleSessionSnapshot) throws -> [MonitorReading] {
+        try snapshots(from: session).map { snapshot in
+            MonitorReading(snapshot: snapshot,
+                           presentationName: session.presentationNamesByOpaqueSourceID[snapshot.source.id])
+        }
+    }
+
     public static func snapshots(from session: AppleSessionSnapshot) throws -> [MonitorSnapshot] {
         guard session.snapshot.availability == .available else { throw AppleSnapshotRuntimeError.unavailable }
         guard session.unidentifiedPresentSourceCount == 0 else {

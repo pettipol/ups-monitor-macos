@@ -73,7 +73,8 @@ private struct MonitorMenu: View {
                 Text(model.syntheticModeTitle).font(.caption).foregroundStyle(.orange).padding(.top, 10)
             }
             UPSMenuContentView(
-                sources: model.sources, selectedSourceKey: model.selectedSourceKey,
+                sources: model.sources, presentationNamesBySourceKey: model.presentationNamesBySourceKey,
+                selectedSourceKey: model.selectedSourceKey,
                 readState: model.readState, now: model.now, maximumAge: model.maximumAge,
                 acquisitionSucceeded: model.acquisitionSucceeded,
                 onSelect: { model.select($0) }, onRefresh: { model.refresh() },
@@ -170,7 +171,8 @@ private struct MonitorWindow: View {
             }
 
             UPSDetailsView(
-                sources: model.sources, selectedSourceKey: model.selectedSourceKey,
+                sources: model.sources, presentationNamesBySourceKey: model.presentationNamesBySourceKey,
+                selectedSourceKey: model.selectedSourceKey,
                 readState: model.readState, now: model.now, maximumAge: model.maximumAge,
                 acquisitionSucceeded: model.acquisitionSucceeded,
                 history: model.history,

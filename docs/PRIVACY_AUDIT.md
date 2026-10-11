@@ -120,3 +120,31 @@ local-data declarations to the app and widget and source/bundle checks. It does
 not turn this earlier static audit into runtime evidence or establish Apple
 distribution acceptance. This report is not a legal assessment, comprehensive
 security review, or publication approval.
+
+## Presentation-Name Source Update (2026-10-11)
+
+Static source review of the current name path found that the Apple reader takes
+`kIOPSNameKey` from the same power-source description paired with the current
+opaque session token, then applies the shared trimming filter, a 64-Character /
+160-UTF-8-byte limit, and rejection of control, format, line-separator and
+paragraph-separator scalars (`Sources/ApplePowerSource/AppleSessionReader.swift:64-96`,
+`Sources/UPSCore/PowerSourcePresentation.swift:3-16`). The label travels
+separately from `MonitorSnapshot` through runtime/app state and can be included
+as an optional `presentationName` in the local widget snapshot envelope
+(`Sources/UPSRuntime/AppleSnapshotAdapter.swift:10-15`,
+`Sources/UPSRuntime/MonitorCoordinator.swift:21-32,74-81`,
+`App/MonitorAppModel.swift:340-349,465-475`,
+`Sources/UPSWidgetData/WidgetSnapshot.swift:21-70`). It does not redefine
+source identity or enter the history snapshot, JSON/CSV export or energy data
+path. The name may identify a device or location and is not a guaranteed model
+or SKU; absent/invalid names use the UPS/provider fallback. No persistent user
+alias is introduced.
+
+This is a source-level data-flow note, not a runtime privacy or WidgetKit
+qualification. Offline validation passed 273 Swift tests (two optional client
+interop tests skipped), 93 Python tests, package Release and ad-hoc Xcode
+Release builds, source/bundle privacy checks and signature verification. The
+strengthened late-cancellation test subsequently passed in the 25-test focused
+name selection. Host fixtures verify selection, backend/no-source clearing,
+stale-cache pairing, and exclusion from history JSON/CSV exports. Earlier dated
+evidence above remains specific to its own revision.

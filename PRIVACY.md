@@ -27,9 +27,10 @@ boundaries. No client, driver or service is installed automatically.
 | Data | When stored | Removal / limits |
 |---|---|---|
 | Live measurements and energy accumulators | Memory during the app session | Source/backend changes reset energy; stopping pauses it until the process exits. Explicit energy reset clears the displayed accumulators. |
+| Native presentation name | Memory alongside the current Apple source observation | The sanitized name is a display label, not source identity or a guaranteed SKU; it may itself identify a device or location. No persistent alias is created. |
 | History | Explicit recording opt-in; private local SQLite storage | Session/all-history deletion is available. Recording off does not erase existing rows. Retention is up to 90 days / 100,000 rows, enforced on append or explicit prune, not a background expiry timer. |
 | JSON/CSV exports | Only on explicit save | Separate user-owned files; clearing app history does not delete them. Energy export is a separate session estimate, without absolute system uptime. |
-| Widget snapshot | When a signed App Group is configured, independently of history opt-in | Latest selected snapshot persists in the shared container for the widget. There is no separate widget-cache purge control in the current UI; do not interpret history deletion as cache deletion. |
+| Widget snapshot | When a signed App Group is configured, independently of history opt-in | The latest selected snapshot may include its optional sanitized presentation name in the local shared-container envelope. There is no separate widget-cache purge control in the current UI; do not interpret history deletion as cache deletion. |
 | Local notifications | Optional per-session enable plus macOS authorization | The app clears its own fixed notification identifiers on lifecycle transitions. OS surfaces, retention and delivery remain macOS-controlled and unqualified here. |
 
 Owner-only file permissions reduce access by other users; they are not
@@ -39,6 +40,12 @@ export copies or operating-system diagnostic/notification retention.
 
 The default ad-hoc build has no App Group configured. Real shared-container
 access, notification presentation and runtime egress are still unverified.
+When an Apple presentation name is absent or rejected, the UI falls back to
+the UPS/provider label. The name is not added to `MonitorSnapshot`, history,
+JSON/CSV export or energy records; it is an observation-bound display value.
+Synthetic name-path tests check that selection and stale caches preserve the
+name/snapshot pair and that history exports exclude the label. They do not
+establish runtime egress or operating-system retention behavior.
 The app exports only modeled values; upstream raw errors are redacted in
 user-facing failures. Do not attach raw hardware dumps or private build logs
 to public issues. The [macOS privacy declarations](docs/PRIVACY_MANIFEST.md)

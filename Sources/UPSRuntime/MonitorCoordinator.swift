@@ -1,4 +1,5 @@
 import Foundation
+import UPSCore
 import UPSModel
 
 public enum MonitorRuntimeFailure: Equatable, Sendable {
@@ -21,11 +22,14 @@ public struct MonitorSourceState: Equatable, Sendable {
     public let source: MonitorSource
     public let snapshot: MonitorSnapshot
     public let freshness: SnapshotFreshness
+    public let presentationName: String?
 
-    public init(source: MonitorSource, snapshot: MonitorSnapshot, freshness: SnapshotFreshness) {
+    public init(source: MonitorSource, snapshot: MonitorSnapshot, freshness: SnapshotFreshness,
+                presentationName: String? = nil) {
         self.source = source
         self.snapshot = snapshot
         self.freshness = freshness
+        self.presentationName = PowerSourcePresentation.name(presentationName)
     }
 }
 
@@ -67,24 +71,35 @@ public enum MonitorCoordinatorConfigurationError: Error, Equatable {
     case invalidPollInterval
 }
 
+public struct MonitorReading: Equatable, Sendable {
+    public let snapshot: MonitorSnapshot
+    public let presentationName: String?
+
+    public init(snapshot: MonitorSnapshot, presentationName: String? = nil) {
+        self.snapshot = snapshot
+        self.presentationName = PowerSourcePresentation.name(presentationName)
+    }
+}
+
 public actor MonitorCoordinator {
     public typealias Read = @Sendable () async throws -> [MonitorSnapshot]
+    public typealias ReadWithPresentation = @Sendable () async throws -> [MonitorReading]
     public typealias Clock = @Sendable () -> Date
     public typealias MonotonicClock = @Sendable () -> TimeInterval
     public typealias Sink = @Sendable (MonitorSnapshot, Date) async throws -> Void
 
     private let pollInterval: TimeInterval
     private let maximumAge: TimeInterval
-    private let read: Read
+    private let readWithPresentation: ReadWithPresentation
     private let clock: Clock
     private let monotonicClock: MonotonicClock
     private let sink: Sink?
     private var generation: UInt64 = 0
     private var nextOperationID: UInt64 = 0
     private var inFlightOperationID: UInt64?
-    private var activeReadTask: Task<[MonitorSnapshot], Error>?
+    private var activeReadTask: Task<[MonitorReading], Error>?
     private var pollingTask: Task<Void, Never>?
-    private var cachedSnapshots: [MonitorSnapshot] = []
+    private var cachedReadings: [MonitorReading] = []
     private var acquisition: MonitorAcquisitionState = .idle
     private var lastAttemptAt: Date?
     private var lastSuccessAt: Date?
@@ -104,7 +119,25 @@ public actor MonitorCoordinator {
         }
         self.pollInterval = pollInterval
         maximumAge = pollInterval * 2
-        self.read = read
+        readWithPresentation = { try await read().map { MonitorReading(snapshot: $0) } }
+        self.clock = clock
+        self.monotonicClock = monotonicClock
+        self.sink = sink
+    }
+
+    public init(
+        pollInterval: TimeInterval = 5,
+        readWithPresentation: @escaping ReadWithPresentation,
+        clock: @escaping Clock = { Date() },
+        monotonicClock: @escaping MonotonicClock = { ProcessInfo.processInfo.systemUptime },
+        sink: Sink? = nil
+    ) throws {
+        guard pollInterval.isFinite, (1...300).contains(pollInterval) else {
+            throw MonitorCoordinatorConfigurationError.invalidPollInterval
+        }
+        self.pollInterval = pollInterval
+        maximumAge = pollInterval * 2
+        self.readWithPresentation = readWithPresentation
         self.clock = clock
         self.monotonicClock = monotonicClock
         self.sink = sink
@@ -135,11 +168,11 @@ public actor MonitorCoordinator {
             return currentState()
         }
 
-        let task = Task { try await read() }
+        let task = Task { try await readWithPresentation() }
         activeReadTask = task
-        let snapshots: [MonitorSnapshot]
+        let readings: [MonitorReading]
         do {
-            snapshots = try await withTaskCancellationHandler {
+            readings = try await withTaskCancellationHandler {
                 try await task.value
             } onCancel: {
                 task.cancel()
@@ -180,25 +213,25 @@ public actor MonitorCoordinator {
             cacheStale = true
             return currentState()
         }
-        guard Self.isValidCollection(snapshots, now: now) else {
+        guard Self.isValidCollection(readings, now: now) else {
             finish(operationID: operationID)
             acquisition = .failed(.invalidCollection)
             cacheStale = true
             return currentState()
         }
 
-        cachedSnapshots = snapshots.sorted(by: Self.sourceOrder)
+        cachedReadings = readings.sorted { Self.sourceOrder($0.snapshot, $1.snapshot) }
         lastSuccessAt = now
         lastSuccessUptime = receivedUptime
         cacheStale = false
         storageFailure = false
-        acquisition = snapshots.isEmpty ? .noSources : .succeeded
+        acquisition = readings.isEmpty ? .noSources : .succeeded
 
         if let sink {
-            for snapshot in cachedSnapshots {
+            for reading in cachedReadings {
                 guard generation == operationGeneration, !Task.isCancelled else { break }
                 do {
-                    try await sink(snapshot, now)
+                    try await sink(reading.snapshot, now)
                 } catch {
                     guard generation == operationGeneration else { break }
                     storageFailure = true
@@ -238,8 +271,9 @@ public actor MonitorCoordinator {
     public func currentState() -> MonitorCoordinatorState {
         let now = clock()
         let acquisitionSucceeded = !cacheStale && Self.isValidDate(now)
-        let sourceStates = cachedSnapshots.map { snapshot in
-            MonitorSourceState(
+        let sourceStates = cachedReadings.map { reading in
+            let snapshot = reading.snapshot
+            return MonitorSourceState(
                 source: snapshot.source,
                 snapshot: snapshot,
                 freshness: evaluateFreshness(
@@ -247,7 +281,8 @@ public actor MonitorCoordinator {
                     now: now,
                     maximumAge: maximumAge,
                     acquisitionSucceeded: acquisitionSucceeded
-                )
+                ),
+                presentationName: reading.presentationName
             )
         }
         return MonitorCoordinatorState(
@@ -280,9 +315,10 @@ public actor MonitorCoordinator {
         activeReadTask = nil
     }
 
-    private static func isValidCollection(_ snapshots: [MonitorSnapshot], now: Date) -> Bool {
+    private static func isValidCollection(_ readings: [MonitorReading], now: Date) -> Bool {
         var seen = Set<SourceIdentityKey>()
-        for snapshot in snapshots {
+        for reading in readings {
+            let snapshot = reading.snapshot
             do { try snapshot.validate() } catch { return false }
             let key = SourceIdentityKey(
                 provider: snapshot.source.provider.rawValue,

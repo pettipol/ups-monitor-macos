@@ -264,9 +264,9 @@ requested. There is no claim of observed live widget values or update timing.
 The user subsequently described a visible `UPS · Apple` widget with most
 advanced readings absent. This is a user-reported observation, not an
 independently inspected screenshot or a timed end-to-end freshness check.
-`Apple` names the data provider, not the UPS manufacturer. The current schema
-does not acquire or publish a hardware name/model; there is no local alias
-setting yet. Opaque source identity remains unchanged.
+`Apple` names the data provider, not the UPS manufacturer. At the time of that
+report, the schema did not acquire or publish a presentation name. Opaque source
+identity remained unchanged.
 
 The Unreleased medium view now shows charge separately from a six-cell grid:
 runtime estimate, load percentage, active W, input V, output V and apparent VA.
@@ -284,3 +284,45 @@ in accordance with the native field's documented context. Missing fields remain
 readings on the target UPS remain unqualified; experimental NUT driver work is
 still on [lifecycle hold](NUT_LIFECYCLE_REVIEW.md). No driver, USB operation,
 power-loss test or hardware configuration change was performed for this update.
+
+### Native Presentation Name Source Update (2026-10-11)
+
+The current source can carry a sanitized name from `kIOPSNameKey` beside the
+Apple source observation. It is matched through the current opaque session
+token, not used as source identity, and is not added to `MonitorSnapshot`,
+history, JSON/CSV exports or energy records. If present, it may be stored in the
+optional `presentationName` field of the local widget envelope; configured
+App Group cache persistence therefore includes this potentially identifying
+display value. It is not guaranteed to be a model or SKU, and no persistent
+user alias is introduced. Missing or rejected names fall back to UPS/provider
+labels.
+
+The render probe source matrix now contains three named cases with a visible
+synthetic-fixture banner. They exercise the production name-label path in an
+offscreen view; they are not installed-app or WidgetKit evidence. Offline
+validation passed 273 Swift tests (two optional interop tests skipped), 93 Python
+tests, package Release and ad-hoc app/widget builds, plus privacy and signature
+checks. The strengthened late-cancellation test passed in a subsequent 25-test
+name selection. A fresh render produced fourteen images; the three named cases
+were visually inspected with the limits in [the render notes](RENDER_PROBE.md).
+
+### Signed Native-Name Host Check (2026-10-11)
+
+A new production SharedRelease app and embedded widget were built with the
+already-authorized local identity and dedicated group. Both fixture-mode values
+were `NO`; their group entitlements matched. Deep/strict signature verification
+and packaged privacy checks passed. The old host was quit normally, its exit
+confirmed, and the new host opened. Its details window visibly displayed the
+native UPS name, online status, full battery charge and the reported battery
+voltage. Runtime, load, W, VA and AC input/output voltage remained unavailable;
+no new measurement is claimed. History remained off.
+
+The new host's WidgetKit query reported small 0, medium 1, other 0. Default and
+`-A` registry queries selected the new signed extension; `-D` also listed the
+older signed build and the new ad-hoc validation copy. No registry entries were
+changed. These queries do not establish the extension selected by the running
+widget host. The UI tool did not expose the UPS widget surface. A scoped cache
+check could read file metadata, but macOS denied content access; no alternative
+access method or permission change was attempted. Thus actual extension reads,
+the named medium widget's desktop appearance and refresh timing remain open.
+No driver, HID interface, power setting or system process was touched.

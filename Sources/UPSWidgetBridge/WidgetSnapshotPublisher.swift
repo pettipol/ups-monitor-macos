@@ -63,12 +63,14 @@ public actor WidgetSnapshotPublisher {
         let elapsed = publication.uptime - previous
         guard elapsed >= 0 else { return false }
         let changedState = publication.value.acquisition != lastReloadSnapshot?.acquisition
+            || publication.value.presentationName != lastReloadSnapshot?.presentationName
             || publication.value.snapshot?.source != lastReloadSnapshot?.snapshot?.source
             || publication.value.snapshot?.status != lastReloadSnapshot?.snapshot?.status
         return elapsed >= 300 || (changedState && elapsed >= 30)
     }
 
     private static func sameContent(_ lhs: WidgetSnapshot, _ rhs: WidgetSnapshot) -> Bool {
-        lhs.acquisition == rhs.acquisition && lhs.maximumAge == rhs.maximumAge && lhs.snapshot == rhs.snapshot
+        lhs.acquisition == rhs.acquisition && lhs.maximumAge == rhs.maximumAge
+            && lhs.snapshot == rhs.snapshot && lhs.presentationName == rhs.presentationName
     }
 }

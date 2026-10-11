@@ -56,10 +56,17 @@ public struct UPSWidgetView: View {
                         .accessibilityHidden(true)
                     Text(UPSWidgetPresentation.headerLabel(
                         providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
-                        isSyntheticFixture: isSyntheticFixture
+                        isSyntheticFixture: isSyntheticFixture,
+                        presentationName: payload?.presentationName
                     ))
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .accessibilityLabel(UPSWidgetPresentation.accessibilityHeaderLabel(
+                            providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                            isSyntheticFixture: isSyntheticFixture,
+                            presentationName: payload?.presentationName
+                        ))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Charge  \(UPSWidgetPresentation.chargeValue(snapshot, includeProvenance: true))")
@@ -88,10 +95,17 @@ public struct UPSWidgetView: View {
                 .accessibilityHidden(true)
             Text(UPSWidgetPresentation.headerLabel(
                 providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
-                isSyntheticFixture: isSyntheticFixture
+                isSyntheticFixture: isSyntheticFixture,
+                presentationName: payload?.presentationName
             ))
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .accessibilityLabel(UPSWidgetPresentation.accessibilityHeaderLabel(
+                    providerLabel: UPSMonitorFormatters.providerLabel(snapshot.source.provider),
+                    isSyntheticFixture: isSyntheticFixture,
+                    presentationName: payload?.presentationName
+                ))
             Spacer(minLength: 0)
         }
     }
@@ -201,8 +215,19 @@ enum UPSWidgetPresentation {
         isSyntheticFixture ? "Synthetic UPS" : nil
     }
 
-    static func headerLabel(providerLabel: String, isSyntheticFixture: Bool) -> String {
-        isSyntheticFixture ? "Synthetic UPS" : "UPS · \(providerLabel)"
+    static func headerLabel(providerLabel: String, isSyntheticFixture: Bool,
+                            presentationName: String? = nil) -> String {
+        if isSyntheticFixture { return "Synthetic UPS" }
+        guard let name = UPSMonitorFormatters.presentationName(presentationName) else {
+            return "UPS · \(providerLabel)"
+        }
+        return "\(name) · \(providerLabel)"
+    }
+
+    static func accessibilityHeaderLabel(providerLabel: String, isSyntheticFixture: Bool,
+                                         presentationName: String? = nil) -> String {
+        headerLabel(providerLabel: providerLabel, isSyntheticFixture: isSyntheticFixture,
+                    presentationName: presentationName)
     }
 
     static func stateLabel(payload: WidgetSnapshot?, date: Date, unavailableReason: String? = nil) -> String {

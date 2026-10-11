@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added an optional sanitized Apple presentation name, paired with the current
+  source observation and used only as a display label plus an optional local
+  widget-envelope field. It does not change source identity or enter history,
+  exports or energy records. Names may identify a device/location and are not
+  guaranteed model/SKU labels; missing names retain the UPS/provider fallback.
+  Synthetic tests, offline builds and named offscreen renders passed; this does
+  not qualify an installed widget or new hardware measurements.
 - Expanded the medium widget to show battery charge and six distinct metrics:
   runtime estimate, UPS load, active watts, input voltage, output voltage and
   apparent power. Missing readings, provenance and stale status remain explicit;

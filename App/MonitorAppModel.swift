@@ -23,6 +23,7 @@ enum MonitorBackend: String {
 @MainActor
 final class MonitorAppModel {
     var sources: [MonitorSnapshot] = []
+    var presentationNamesBySourceKey: [String: String] = [:]
     var selectedSourceKey: String?
     var readState: UPSReadState = .loading
     var now: Date
@@ -62,6 +63,7 @@ final class MonitorAppModel {
     @ObservationIgnored private var coordinator: MonitorCoordinator?
     @ObservationIgnored private var historyStore: UPSHistoryStore?
     @ObservationIgnored private let injectedRead: MonitorCoordinator.Read?
+    @ObservationIgnored private let injectedReadWithPresentation: MonitorCoordinator.ReadWithPresentation?
     @ObservationIgnored private let clock: MonitorCoordinator.Clock
     @ObservationIgnored private let monotonicClock: MonitorCoordinator.MonotonicClock
     @ObservationIgnored private var energyTracker = MonitorEnergyTracker()
@@ -85,6 +87,7 @@ final class MonitorAppModel {
 
     init(
         read: MonitorCoordinator.Read? = nil,
+        readWithPresentation: MonitorCoordinator.ReadWithPresentation? = nil,
         clock: @escaping MonitorCoordinator.Clock = { Date() },
         monotonicClock: @escaping MonitorCoordinator.MonotonicClock = { ProcessInfo.processInfo.systemUptime },
         historyDirectoryURL: URL? = nil,
@@ -96,6 +99,7 @@ final class MonitorAppModel {
         nutReadFactory: @escaping @Sendable (NUTConnectionDraft) async throws -> MonitorCoordinator.Read = MonitorAppModel.makeNUTRead
     ) {
         self.injectedRead = read
+        self.injectedReadWithPresentation = readWithPresentation
         self.clock = clock
         self.monotonicClock = monotonicClock
         self.historyDirectoryURL = historyDirectoryURL
@@ -141,8 +145,8 @@ final class MonitorAppModel {
         }
         configureWidgetSharing()
         do {
-            let read = isWidgetFixture ? widgetFixtureRead() : appleRead()
-            coordinator = try makeCoordinator(read: read, generation: backendGeneration)
+            let read = isWidgetFixture ? Self.withoutPresentation(widgetFixtureRead()) : appleRead()
+            coordinator = try makeCoordinator(readWithPresentation: read, generation: backendGeneration)
             if observesWorkspace && !isWidgetFixture { installWorkspaceObservers() }
             await coordinator?.start()
             guard !stopped else { await coordinator?.stop(); return }
@@ -340,6 +344,9 @@ final class MonitorAppModel {
         guard !stopped, generation == backendGeneration else { return }
         now = clock()
         sources = state.sources.map(\.snapshot)
+        presentationNamesBySourceKey = Dictionary(uniqueKeysWithValues: state.sources.compactMap { source in
+            source.presentationName.map { (UPSMonitorFormatters.sourceKey(for: source.snapshot), $0) }
+        })
         maximumAge = state.maximumAge
         if !sources.contains(where: { UPSMonitorFormatters.sourceKey(for: $0) == selectedSourceKey }) {
             selectedSourceKey = sources.first.map(UPSMonitorFormatters.sourceKey(for:))
@@ -460,7 +467,10 @@ final class MonitorAppModel {
         let date = clock()
         widgetSequence &+= 1
         let value = WidgetSnapshot(publishedAt: date, acquisition: acquisition, maximumAge: maximumAge,
-                                   snapshot: acquisition == .noSources ? nil : selected)
+                                   snapshot: acquisition == .noSources ? nil : selected,
+                                   presentationName: acquisition == .noSources ? nil : selected.flatMap {
+                                       presentationNamesBySourceKey[UPSMonitorFormatters.sourceKey(for: $0)]
+                                   })
         let result = await widgetPublisher.publish(value, now: date,
                                                    uptime: ProcessInfo.processInfo.systemUptime, sequence: widgetSequence)
         guard !stopped || allowStopped else { return }
@@ -539,7 +549,7 @@ final class MonitorAppModel {
         do {
             let read = try await nutReadFactory(connectionDraft)
             guard !stopped else { return }
-            try await replaceBackend(.nut, read: read)
+            try await replaceBackend(.nut, readWithPresentation: Self.withoutPresentation(read))
             guard !stopped else { return }
             showsNUTSettings = false
         } catch {
@@ -555,7 +565,7 @@ final class MonitorAppModel {
         do {
             await reader.resetIdentity()
             guard !stopped else { return }
-            try await replaceBackend(.apple, read: appleRead())
+            try await replaceBackend(.apple, readWithPresentation: appleRead())
             connectionMessage = nil
         } catch {
             connectionMessage = "Monitoring unavailable"
@@ -572,11 +582,17 @@ final class MonitorAppModel {
         return { try await reader.read() }
     }
 
-    private func appleRead() -> MonitorCoordinator.Read {
+    nonisolated private static func withoutPresentation(_ read: @escaping MonitorCoordinator.Read) -> MonitorCoordinator.ReadWithPresentation {
+        { try await read().map { MonitorReading(snapshot: $0) } }
+    }
+
+    private func appleRead() -> MonitorCoordinator.ReadWithPresentation {
         let reader = self.reader
-        return injectedRead ?? {
+        if let injectedReadWithPresentation { return injectedReadWithPresentation }
+        if let injectedRead { return Self.withoutPresentation(injectedRead) }
+        return {
             let observation = await reader.snapshot()
-            return try AppleSnapshotRuntimeAdapter.snapshots(from: observation)
+            return try AppleSnapshotRuntimeAdapter.readings(from: observation)
         }
     }
 
@@ -602,16 +618,16 @@ final class MonitorAppModel {
                                status: MonitorStatus(lineState: .onLine, quality: .available), metrics: metrics)
     }
 
-    private func makeCoordinator(read: @escaping MonitorCoordinator.Read, generation: UInt64) throws -> MonitorCoordinator {
-        try MonitorCoordinator(read: read, clock: clock, monotonicClock: monotonicClock, sink: { [weak self] snapshot, date in
+    private func makeCoordinator(readWithPresentation read: @escaping MonitorCoordinator.ReadWithPresentation, generation: UInt64) throws -> MonitorCoordinator {
+        try MonitorCoordinator(readWithPresentation: read, clock: clock, monotonicClock: monotonicClock, sink: { [weak self] snapshot, date in
             guard let self else { return }
             try await self.persist(snapshot, now: date, generation: generation)
         })
     }
 
-    private func replaceBackend(_ backend: MonitorBackend, read: @escaping MonitorCoordinator.Read) async throws {
+    private func replaceBackend(_ backend: MonitorBackend, readWithPresentation read: @escaping MonitorCoordinator.ReadWithPresentation) async throws {
         let nextGeneration = backendGeneration &+ 1
-        let replacement = try makeCoordinator(read: read, generation: nextGeneration)
+        let replacement = try makeCoordinator(readWithPresentation: read, generation: nextGeneration)
         backendGeneration = nextGeneration
         stateTask?.cancel()
         stateTask = nil
@@ -619,6 +635,7 @@ final class MonitorAppModel {
         history = nil
         lastHistoryCapture = nil
         sources = []
+        presentationNamesBySourceKey = [:]
         resetEnergyState()
         selectedSourceKey = nil
         acquisitionSucceeded = false

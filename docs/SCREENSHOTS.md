@@ -76,6 +76,19 @@ is January 2027 while relative-date text follows the host clock; that mismatch
 remains a limitation. The image is a visual reference, not evidence of real UPS
 data or new hardware compatibility.
 
+## Named Medium Preview (2026-10-11)
+
+![Named medium offscreen preview with an explicit synthetic-fixture banner](images/widget-medium-named-offscreen.png)
+
+This is a 329 x 155 point widget body plus a 30-point banner, rendered at scale
+2 with fixture measurements and a synthetic name. It exercises the production
+name-label path without querying a device. The named short/long medium and small
+canvases were visually inspected; long names are abbreviated and the full label
+is supplied in the view's accessibility text, but VoiceOver was not tested.
+The small canvas retains the renderer placeholder and abbreviated footer. The
+January 2027 fixture date mismatch described above still applies. This image
+is not evidence of an installed widget or live target-UPS telemetry.
+
 ## Interactive Check: Partial
 
 The coordinating reviewer observed these synthetic app behaviors:

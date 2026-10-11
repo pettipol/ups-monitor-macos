@@ -7,6 +7,15 @@ public struct AppleSessionSnapshot: Equatable, Sendable {
     public let sessionID: String
     public let snapshot: PowerSourceSnapshot
     public let unidentifiedPresentSourceCount: Int
+    public let presentationNamesByOpaqueSourceID: [String: String]
+
+    public init(sessionID: String, snapshot: PowerSourceSnapshot, unidentifiedPresentSourceCount: Int,
+                presentationNamesByOpaqueSourceID: [String: String] = [:]) {
+        self.sessionID = sessionID
+        self.snapshot = snapshot
+        self.unidentifiedPresentSourceCount = unidentifiedPresentSourceCount
+        self.presentationNamesByOpaqueSourceID = presentationNamesByOpaqueSourceID
+    }
 }
 
 /// A process-local identity layer. Native power-source IDs never leave this actor.
@@ -46,23 +55,31 @@ public actor AppleSessionReader {
         return sanitizedSnapshot(descriptions, now: now)
     }
 
-    private func unavailableSnapshot(now: Date) -> AppleSessionSnapshot {
+    func unavailableSnapshot(now: Date) -> AppleSessionSnapshot {
         identityMapper.reset()
         let normalized = PowerSourceNormalizer.snapshot(from: [], capturedAt: now, availability: .unavailable)
         return AppleSessionSnapshot(sessionID: sessionID, snapshot: normalized, unidentifiedPresentSourceCount: 0)
     }
 
-    private func sanitizedSnapshot(_ descriptions: [[String: Any]], now: Date) -> AppleSessionSnapshot {
+    func sanitizedSnapshot(_ descriptions: [[String: Any]], now: Date) -> AppleSessionSnapshot {
         let mappedIDs = identityMapper.assignments(for: descriptions)
         let normalized = PowerSourceNormalizer.snapshot(from: descriptions, capturedAt: now)
+        let presentUPSDescriptions = descriptions.filter {
+            let source = PowerSourceNormalizer.normalize($0, id: "")
+            return source.kind == .ups && source.isPresent == true
+        }
         var unidentifiedCount = 0
         var safeSources: [PowerSource] = []
-        for (source, token) in zip(normalized.sources, mappedIDs) {
+        var presentationNames: [String: String] = [:]
+        for ((source, token), description) in zip(zip(normalized.sources, mappedIDs), presentUPSDescriptions) {
             guard let token else {
                 unidentifiedCount += 1
                 continue
             }
             safeSources.append(source.replacingID(with: token))
+            if let name = PowerSourcePresentation.name(description[kIOPSNameKey] as? String) {
+                presentationNames[token] = name
+            }
         }
         let safeSnapshot = PowerSourceSnapshot(
             capturedAt: normalized.capturedAt,
@@ -74,7 +91,8 @@ public actor AppleSessionReader {
         return AppleSessionSnapshot(
             sessionID: sessionID,
             snapshot: safeSnapshot,
-            unidentifiedPresentSourceCount: unidentifiedCount
+            unidentifiedPresentSourceCount: unidentifiedCount,
+            presentationNamesByOpaqueSourceID: presentationNames
         )
     }
 }

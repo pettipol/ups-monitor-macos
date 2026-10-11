@@ -1,4 +1,5 @@
 import Foundation
+import UPSCore
 import UPSModel
 
 public enum WidgetAcquisition: String, Codable, Sendable {
@@ -14,6 +15,7 @@ public enum WidgetSnapshotValidationError: Error, Equatable {
     case invalidAcquisition
     case invalidAge
     case invalidSnapshot
+    case invalidPresentationName
 }
 
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
@@ -22,19 +24,22 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public let acquisition: WidgetAcquisition
     public let maximumAge: TimeInterval
     public let snapshot: MonitorSnapshot?
+    public let presentationName: String?
 
     public init(
         schemaVersion: Int = 1,
         publishedAt: Date,
         acquisition: WidgetAcquisition,
         maximumAge: TimeInterval,
-        snapshot: MonitorSnapshot?
+        snapshot: MonitorSnapshot?,
+        presentationName: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.publishedAt = publishedAt
         self.acquisition = acquisition
         self.maximumAge = maximumAge
         self.snapshot = snapshot
+        self.presentationName = presentationName
     }
 
     public func validate() throws {
@@ -42,6 +47,12 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         guard publishedAt.timeIntervalSince1970.isFinite else { throw WidgetSnapshotValidationError.invalidDate }
         guard maximumAge.isFinite, (1...600).contains(maximumAge) else {
             throw WidgetSnapshotValidationError.invalidAge
+        }
+        if let presentationName {
+            guard PowerSourcePresentation.name(presentationName) == presentationName,
+                  snapshot != nil else {
+                throw WidgetSnapshotValidationError.invalidPresentationName
+            }
         }
 
         switch acquisition {
@@ -78,6 +89,7 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         case acquisition
         case maximumAge
         case snapshot
+        case presentationName
     }
 
     public init(from decoder: Decoder) throws {
@@ -87,6 +99,7 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         acquisition = try values.decode(WidgetAcquisition.self, forKey: .acquisition)
         maximumAge = try values.decode(TimeInterval.self, forKey: .maximumAge)
         snapshot = try values.decodeIfPresent(MonitorSnapshot.self, forKey: .snapshot)
+        presentationName = try values.decodeIfPresent(String.self, forKey: .presentationName)
         do {
             try validate()
         } catch {

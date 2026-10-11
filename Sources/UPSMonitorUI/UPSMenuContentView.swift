@@ -3,6 +3,7 @@ import UPSModel
 
 public struct UPSMenuContentView: View {
     public let sources: [MonitorSnapshot]
+    public let presentationNamesBySourceKey: [String: String]
     public let selectedSourceKey: String?
     public let readState: UPSReadState
     public let now: Date
@@ -14,6 +15,7 @@ public struct UPSMenuContentView: View {
 
     public init(
         sources: [MonitorSnapshot],
+        presentationNamesBySourceKey: [String: String] = [:],
         selectedSourceKey: String?,
         readState: UPSReadState,
         now: Date,
@@ -24,6 +26,7 @@ public struct UPSMenuContentView: View {
         onOpenDetails: @escaping @MainActor @Sendable () -> Void
     ) {
         self.sources = sources
+        self.presentationNamesBySourceKey = presentationNamesBySourceKey
         self.selectedSourceKey = selectedSourceKey
         self.readState = readState
         self.now = now
@@ -51,6 +54,8 @@ public struct UPSMenuContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(selected.map(sourceLabel(for:)) ?? "UPS Monitor")
                         .font(.headline)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(statusHeadline)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -67,8 +72,13 @@ public struct UPSMenuContentView: View {
             if sources.count > 1 {
                 Picker("UPS", selection: selectionBinding) {
                     ForEach(Array(sources.enumerated()), id: \.offset) { index, snapshot in
-                        Text(UPSMonitorFormatters.sourceLabel(at: index, provider: snapshot.source.provider))
-                            .tag(UPSMonitorFormatters.sourceKey(for: snapshot))
+                        let key = UPSMonitorFormatters.sourceKey(for: snapshot)
+                        Text(UPSMonitorFormatters.sourceLabel(
+                            at: index, provider: snapshot.source.provider,
+                            presentationName: presentationNamesBySourceKey[key],
+                            includeOrdinal: sources.count > 1
+                        ))
+                        .tag(key)
                     }
                 }
                 .labelsHidden()
@@ -147,7 +157,10 @@ public struct UPSMenuContentView: View {
     private func sourceLabel(for snapshot: MonitorSnapshot) -> String {
         let key = UPSMonitorFormatters.sourceKey(for: snapshot)
         let index = sources.firstIndex(where: { UPSMonitorFormatters.sourceKey(for: $0) == key }) ?? 0
-        return UPSMonitorFormatters.sourceLabel(at: index, provider: snapshot.source.provider)
+        return UPSMonitorFormatters.sourceLabel(
+            at: index, provider: snapshot.source.provider,
+            presentationName: presentationNamesBySourceKey[key], includeOrdinal: sources.count > 1
+        )
     }
 
     private func metricSummary(for snapshot: MonitorSnapshot) -> some View {

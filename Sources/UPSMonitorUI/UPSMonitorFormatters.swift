@@ -1,4 +1,5 @@
 import Foundation
+import UPSCore
 import UPSModel
 
 public enum UPSReadState: String, Equatable, Sendable {
@@ -16,8 +17,19 @@ public enum UPSMonitorFormatters: Sendable {
         "\(snapshot.source.provider.rawValue)|\(snapshot.source.id)|\(snapshot.source.sessionID)"
     }
 
-    public static func sourceLabel(at index: Int, provider: MonitorProvider) -> String {
-        "UPS \(index + 1) · \(providerLabel(provider))"
+    public static func presentationName(_ value: String?) -> String? {
+        PowerSourcePresentation.name(value)
+    }
+
+    public static func sourceLabel(at index: Int, provider: MonitorProvider,
+                                  presentationName: String? = nil,
+                                  includeOrdinal: Bool = false) -> String {
+        let providerName = providerLabel(provider)
+        let ordinal = "UPS \(index + 1)"
+        guard let name = PowerSourcePresentation.name(presentationName) else {
+            return "\(ordinal) · \(providerName)"
+        }
+        return includeOrdinal ? "\(name) · \(ordinal) · \(providerName)" : "\(name) · \(providerName)"
     }
 
     public static func providerLabel(_ provider: MonitorProvider) -> String {

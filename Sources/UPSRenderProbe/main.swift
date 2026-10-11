@@ -129,6 +129,15 @@ private struct UPSRenderProbe {
                                           maximumAge: 30, snapshot: staleSnapshot)
         let freshPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
                                           maximumAge: 30, snapshot: freshSnapshot)
+        let namedShortPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
+                                               maximumAge: 30, snapshot: freshSnapshot,
+                                               presentationName: "Synthetic Rack")
+        let namedLongPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
+                                              maximumAge: 30, snapshot: freshSnapshot,
+                                              presentationName: "Synthetic " + String(repeating: "L", count: 54))
+        let namedSmallPayload = WidgetSnapshot(publishedAt: capturedAt, acquisition: .active,
+                                               maximumAge: 30, snapshot: freshSnapshot,
+                                               presentationName: "Synthetic Battery Room")
         let missingPayload = WidgetSnapshot(publishedAt: freshDate, acquisition: .noSources,
                                             maximumAge: 30, snapshot: nil)
         let partialSnapshot = MonitorSnapshot(
@@ -191,6 +200,21 @@ private struct UPSRenderProbe {
                      view: AnyView(UPSWidgetView(payload: stalePayload, date: staleDate, isMedium: true,
                                                  isSyntheticFixture: true).padding(16)),
                      background: Color(red: 0.10, green: 0.10, blue: 0.10)),
+            namedFixtureWidgetCase(file: "widget-medium-named-short.png",
+                                   scenario: "widget-medium-named-short-inset16-banner30",
+                                   payload: namedShortPayload, medium: true, bodyWidth: 329,
+                                   bodyHeight: 155, bannerHeight: 30, scheme: "light",
+                                   capturedAt: capturedAt, presentationDate: freshDate),
+            namedFixtureWidgetCase(file: "widget-medium-named-long.png",
+                                   scenario: "widget-medium-named-long-64char-inset16-banner30",
+                                   payload: namedLongPayload, medium: true, bodyWidth: 329,
+                                   bodyHeight: 155, bannerHeight: 30, scheme: "dark",
+                                   capturedAt: capturedAt, presentationDate: freshDate),
+            namedFixtureWidgetCase(file: "widget-small-named.png",
+                                   scenario: "widget-small-named-inset16-banner40",
+                                   payload: namedSmallPayload, medium: false, bodyWidth: 180,
+                                   bodyHeight: 180, bannerHeight: 40, scheme: "light",
+                                   capturedAt: capturedAt, presentationDate: freshDate),
             viewCase(file: "menu-light-single-source-stale.png", scenario: "menu-light-single-source-stale",
                      width: 300, height: 260, scheme: "light", capturedAt: capturedAt,
                      presentationDate: staleDate, textSize: "standard", view: AnyView(menu), background: .white),
@@ -243,6 +267,36 @@ private struct UPSRenderProbe {
                  view: AnyView(UPSWidgetView(payload: payload, date: presentationDate, isMedium: medium)),
                  background: scheme == "dark" ? Color(red: 0.10, green: 0.10, blue: 0.10) : .white,
                  accessibilityTextSize: accessibilityTextSize)
+    }
+
+    @MainActor
+    private static func namedFixtureWidgetCase(file: String, scenario: String, payload: WidgetSnapshot,
+                                               medium: Bool, bodyWidth: Int, bodyHeight: Int,
+                                               bannerHeight: Int, scheme: String,
+                                               capturedAt: Date, presentationDate: Date) -> RenderItem {
+        let background = scheme == "dark" ? Color(red: 0.10, green: 0.10, blue: 0.10) : .white
+        let banner = Text("Synthetic fixture - not a connected UPS")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.black)
+            .multilineTextAlignment(.center)
+            .lineLimit(bannerHeight > 30 ? 2 : 1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
+            .frame(height: CGFloat(bannerHeight))
+            .background(Color.yellow)
+        let canvas = VStack(spacing: 0) {
+            banner
+            UPSWidgetView(payload: payload, date: presentationDate, isMedium: medium,
+                          isSyntheticFixture: false)
+                .padding(16)
+                .frame(width: CGFloat(bodyWidth), height: CGFloat(bodyHeight))
+        }
+        .frame(width: CGFloat(bodyWidth), height: CGFloat(bodyHeight + bannerHeight))
+
+        return viewCase(file: file, scenario: scenario, width: bodyWidth,
+                        height: bodyHeight + bannerHeight, scheme: scheme,
+                        capturedAt: capturedAt, presentationDate: presentationDate,
+                        textSize: "standard", view: AnyView(canvas), background: background)
     }
 
     @MainActor

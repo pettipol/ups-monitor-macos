@@ -21,7 +21,7 @@ synthetic PNG images plus a JSON manifest. Choose a dedicated location for each
 run; the helper never overwrites or cleans up prior output. It accepts no data
 source, snapshot file, app configuration, or arbitrary scenario arguments.
 
-The fixed matrix contains eleven chosen canvases:
+The current source matrix contains fourteen chosen canvases:
 
 | File | Scenario | Canvas |
 |---|---|---:|
@@ -33,6 +33,9 @@ The fixed matrix contains eleven chosen canvases:
 | `widget-medium-compact-rich.png` | compact medium, light, populated readings, inset 16 points | 329 x 155 points |
 | `widget-medium-compact-partial.png` | compact medium, dark, partial data, inset 16 points | 329 x 155 points |
 | `widget-medium-compact-large-stale.png` | compact medium, dark, large readings and stale data, inset 16 points | 329 x 155 points |
+| `widget-medium-named-short.png` | named medium, short synthetic name, inset 16 points, plus 30-point synthetic-fixture banner | 329 x 185 points |
+| `widget-medium-named-long.png` | named medium, 64-character synthetic name, inset 16 points, plus 30-point synthetic-fixture banner | 329 x 185 points |
+| `widget-small-named.png` | named small, short synthetic name, inset 16 points, plus wrapping 40-point synthetic-fixture banner | 180 x 220 points |
 | `menu-light-single-source-stale.png` | single-source menu with stale synthetic capture | 300 x 260 points |
 | `energy-light-paused-missing.png` | input estimate paused; UPS channel missing | 420 x 220 points |
 | `energy-dark-large-two-channels.png` | two channels with very large synthetic estimates | 420 x 240 points |
@@ -93,3 +96,20 @@ bounded visual inspection only. No automated pixel checks were run, and this
 does not establish WidgetKit layout, installation, or VoiceOver behavior. The
 fixtures use a January 2027 presentation date while relative-date text follows
 the host clock; that date mismatch remains a limitation.
+
+### Named-Widget Source Cases (2026-10-11)
+
+The three named cases use fixture snapshots and names beginning with
+`Synthetic`; the long name is exactly 64 ASCII characters (64 UTF-8 bytes).
+Each canvas displays `Synthetic fixture - not a connected UPS` above the
+widget, while the widget view uses `isSyntheticFixture: false` so the named
+production presentation branch is exercised. The banner is part of the canvas,
+not the widget body. No UPS is connected or queried by these fixtures.
+
+After offline tests and builds passed, a fresh run generated all fourteen
+images. The coordinator inspected the three named canvases: the short medium
+name, provider and six measurement cells were legible without observed overlap;
+the long medium and small names were abbreviated with an ellipsis. The small
+canvas still has the documented unsupported-control placeholder and abbreviated
+footer. No automated pixel or VoiceOver checks were run. These remain offscreen
+synthetic previews, not installed WidgetKit appearance or accessibility proof.

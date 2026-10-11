@@ -94,3 +94,26 @@ controls row was hidden visually while preserving the accessible `Range`
 group; the corrected row was inspected in the running app. This does not
 qualify VoiceOver, all text sizes or appearance modes. The focused history
 test selection passed 29 XCTest tests and eight Swift Testing tests.
+
+## Apple API Boundary Check (2026-10-11)
+
+The installed public SDK documents `kIOPSNameKey` as a power-source name, not
+a guaranteed SKU or stable device identifier. Apple's published
+[`IOHIDUPSClass.m` at IOHIDFamily revision `777ccd9`](https://github.com/apple-oss-distributions/IOHIDFamily/blob/777ccd9698845aadf711e32d843c8c9b777431d9/IOHIDLib/IOHIDUPSClass.m)
+maps the HID product string to that name, falling back to the manufacturer;
+serial data has a separate property. A name string is still untrusted display
+text and may contain identifying information supplied by a device. This source
+snapshot does not establish the exact implementation shipped on the local Mac.
+
+The public `IOUPSPlugInInterface` exposes capabilities and events, but it is not
+equivalent to reading the already-published IOPowerSources dictionary. In the
+published implementation, `start` creates a device interface and calls its
+`open` method. Its common Power Device mapping covers voltage, current and
+temperature, not distinct AC input/output, load or active/apparent power fields.
+Its `getEvent` returns the plugin's cached event dictionary. These inspected
+paths are not proof that all private fields or other drivers lack rich data.
+
+Consequently, attaching that plugin is not admitted as a passive workaround for
+the missing measurements. No plugin, HID interface or hardware was opened for
+this check. Names can instead be taken from the existing native description,
+subject to presentation-only handling and explicit local-cache disclosure.
