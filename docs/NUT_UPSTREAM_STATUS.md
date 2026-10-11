@@ -1,11 +1,42 @@
 # Experimental NUT Upstream Status
 
-Reviewed on 2026-10-08. This is a source-research snapshot, not hardware
+Refreshed on 2026-10-11. This is a source-research snapshot, not hardware
 qualification. The app does not bundle or launch a UPS driver, run `upsmon`,
 or implement automatic shutdown. The experimental guarded source patch is an
 offline qualification artifact, not a production backend.
 
-## Open Findings
+## Merged Upstream, Not Hardware Qualified
+
+The official GitHub PR records now confirm these merges on 2026-10-10:
+
+| Change | Merge time (UTC) | Merge commit |
+|---|---|---|
+| [PR #3714](https://github.com/networkupstools/nut/pull/3714): calibration-status mapping and USB tunnel padding | 14:15:47 | `d460f7b5829f15569914077fd3e5fcb64d087465` |
+| [PR #3728](https://github.com/networkupstools/nut/pull/3728): HID fallback status freshness | 14:22:29 | `b3ca797a274d85103f7cb78d5da445c309911f78` |
+
+The observed master is
+[`73c4502191d025e35122463986a80c676e734b04`](https://github.com/networkupstools/nut/commit/73c4502191d025e35122463986a80c676e734b04).
+Local Git ancestry confirms both merges are included. The three-revision
+[offline fallback replay](NUT_HID_REPLAY.md) now covers this exact master;
+the two synthetic residuals below remain. This is not a full-driver test.
+NUT stable remains 2.8.5 and libusb stable remains 1.0.30 at this check.
+
+The guarded patch and full-driver qualification baseline remain on `1a8369f`.
+A non-mutating `git apply --check` of that patch against the new master fails
+at the frame-parser context changed by #3714. Do not force-apply it or reuse
+the old guard evidence for the new source. A reviewed offline rebase and
+renewed guard tests are required before even considering a new candidate.
+The upstream changes do not remove USB opening/claim, STOP/INIT/NEXT tunnel
+messages, or cleanup traffic. No new driver was built or run in this refresh.
+
+[PR #3719](https://github.com/networkupstools/nut/pull/3719) remains open and
+unmerged. Its serial and control-command changes must not be attributed to
+the tested master or added to this monitor's read-only v1. Issue #3587 also
+remains open; the maintainer's
+[2026-10-10 comment](https://github.com/networkupstools/nut/issues/3587#issuecomment-6098513076)
+requests testing of the integrated master, not a compatibility endorsement.
+
+## Unresolved Hardware Findings
 
 - [NUT issue #3587](https://github.com/networkupstools/nut/issues/3587) describes
   startup timeouts and an unresponsive USB Microlink session on other Smart-UPS
@@ -17,14 +48,15 @@ offline qualification artifact, not a production backend.
   the HID fallback appear fresh before AC status had been decoded. Later stale
   data caused a configured `upsmon` to shut down a host that still had mains
   power. That is a reported software shutdown, not a demonstrated UPS output
-  interruption. The proposed fix requires recent decoded AC/discharging status;
+  interruption. The merged fix requires recent decoded AC/discharging status;
   its author reports offline replay and tests on that SMX, but no real
   on-battery fallback transition or other-device qualification.
 
-PR #3728 was open at review and stacked on #3714. Do not treat its entire diff
-as an isolated, merged, or qualified fix. The reviewed master still matched
+At the original 2026-10-08 review, PR #3728 was open and stacked on #3714.
+Its entire diff was not an isolated fix. The then-reviewed master matched
 [`1a8369f8688443a500527059167d2f66ca27535f`](https://github.com/networkupstools/nut/commit/1a8369f8688443a500527059167d2f66ca27535f).
-Our guarded patch does **not** correct this fallback-status defect. Restricting
+Our unchanged guarded patch does **not** correct this fallback-status defect.
+Its baseline has not been promoted to the newly merged master. Restricting
 USB/process side effects does not make upstream measurements trustworthy.
 
 ## Already Available Parser Fixes
@@ -44,9 +76,9 @@ These existing fixes should be reused, not reimplemented. They concern HID
 **descriptors**, not the runtime fallback report decoder exercised below.
 Their inclusion does not resolve the replay's truncated-report residual.
 
-[PR #3714](https://github.com/networkupstools/nut/pull/3714) remained open at
-review. It separates calibration result flags from `ups.status` and discards
-the remaining tunnel-report bytes after extracting a frame only when that
+[PR #3714](https://github.com/networkupstools/nut/pull/3714), open on October 8
+and merged on October 10, separates calibration result flags from `ups.status`
+and discards the remaining tunnel-report bytes after extracting a frame only when that
 remainder is all zero. It is not indiscriminate removal of zero bytes before
 parsing. Its reported SMX1500/firmware-16/Linux results do not qualify the
 target SMC1500I/firmware-10/macOS combination.
@@ -55,7 +87,7 @@ target SMC1500I/firmware-10/macOS combination.
 
 The exact corrective commit
 [`e0bb8ea64f7f8a140ad8908904186a05a324c295`](https://github.com/networkupstools/nut/commit/e0bb8ea64f7f8a140ad8908904186a05a324c295)
-was subsequently compared with the pinned base using an
+was compared with the original pinned base using an
 [offline replay of the actual decoder/getter and publisher](NUT_HID_REPLAY.md). The base
 published incomplete or stale status in the synthetic scenarios; the proposed
 correction withheld those snapshots. Two residual behaviors reproduced in
@@ -71,10 +103,16 @@ The isolated correction also passed a textual `git apply --check` against the
 pinned base. Its stacked ancestry alone does not establish a code dependency
 on #3714; conversely, textual applicability and a fragment replay do not
 qualify an integrated backport. The guarded patch remains unchanged. These
-results support further upstream review, not hardware testing or release.
+results supported further upstream review, not hardware testing or release.
 The isolated `e0bb8ea` delta changes only `apcmicrolink-usb.c` and `.h`;
 differences in other files between its full tree and our base include its
 stacked ancestry and must not be attributed to that isolated correction.
+
+On October 11 the same extracted functions from merged master were replayed
+with the same assertions. Their generated translation unit differs from the
+corrective revision only in its revision comment. This confirms continuity
+of the bounded fallback fix; the replay does not exercise #3714's padding
+scanner hook, calibration map, full startup, concurrency, or USB lifecycle.
 
 ## Qualification Boundary
 

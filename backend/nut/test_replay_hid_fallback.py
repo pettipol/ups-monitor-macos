@@ -25,10 +25,12 @@ class SourceFenceTests(unittest.TestCase):
             revision: dict(paths)
             for revision, paths in replay.SOURCE_SHA256.items()
         }
-        self.expected_hashes[replay.BASE_REVISION] = {
+        synthetic_hashes = {
             relative_path: hashlib.sha256(source.read_bytes()).hexdigest()
             for relative_path, source in self.sources.items()
         }
+        for revision in replay.REVISIONS:
+            self.expected_hashes[revision] = dict(synthetic_hashes)
 
     def test_unknown_revision_is_refused_before_git(self) -> None:
         with patch.object(replay, "git_output") as git:
@@ -49,67 +51,70 @@ class SourceFenceTests(unittest.TestCase):
                 replay.verify_source(self.root, replay.BASE_REVISION)
 
     def test_clean_checkout_returns_both_authorized_source_buffers(self) -> None:
-        with (
-            patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
-            patch.object(replay, "git_output", side_effect=[replay.BASE_REVISION, ""]),
-        ):
-            label, source_bytes = replay.verify_source(self.root, replay.BASE_REVISION)
-        self.assertEqual(label, "base")
-        self.assertEqual(
-            source_bytes,
-            {relative_path: source.read_bytes() for relative_path, source in self.sources.items()},
-        )
+        for revision, label in replay.REVISIONS.items():
+            with self.subTest(revision=revision):
+                with (
+                    patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
+                    patch.object(replay, "git_output", side_effect=[revision, ""]),
+                ):
+                    actual_label, source_bytes = replay.verify_source(self.root, revision)
+                self.assertEqual(actual_label, label)
+                self.assertEqual(
+                    source_bytes,
+                    {relative_path: source.read_bytes() for relative_path, source in self.sources.items()},
+                )
 
     def test_clean_fake_git_metadata_cannot_admit_changed_source_bytes(self) -> None:
-        for target in replay.SOURCE_RELATIVE_PATHS:
-            with self.subTest(source=target):
-                expected = {
-                    revision: dict(paths)
-                    for revision, paths in replay.SOURCE_SHA256.items()
-                }
-                for other in replay.SOURCE_RELATIVE_PATHS:
-                    if other != target:
-                        expected[replay.BASE_REVISION][other] = self.expected_hashes[
-                            replay.BASE_REVISION
-                        ][other]
-                with (
-                    patch.object(replay, "SOURCE_SHA256", expected),
-                    patch.object(replay, "git_output", side_effect=[replay.BASE_REVISION, ""]),
-                ):
-                    with self.assertRaises(replay.ReplayError):
-                        replay.verify_source(self.root, replay.BASE_REVISION)
+        for revision in replay.REVISIONS:
+            for target in replay.SOURCE_RELATIVE_PATHS:
+                with self.subTest(revision=revision, source=target):
+                    expected = {
+                        candidate: dict(paths)
+                        for candidate, paths in replay.SOURCE_SHA256.items()
+                    }
+                    for other in replay.SOURCE_RELATIVE_PATHS:
+                        if other != target:
+                            expected[revision][other] = self.expected_hashes[revision][other]
+                    with (
+                        patch.object(replay, "SOURCE_SHA256", expected),
+                        patch.object(replay, "git_output", side_effect=[revision, ""]),
+                    ):
+                        with self.assertRaises(replay.ReplayError):
+                            replay.verify_source(self.root, revision)
 
     def test_symlink_source_is_refused_for_each_fenced_file(self) -> None:
-        for target in replay.SOURCE_RELATIVE_PATHS:
-            with self.subTest(source=target):
-                source = self.sources[target]
-                source.unlink()
-                replacement = self.root / f"synthetic-{target.name}"
-                replacement.write_text("/* synthetic */\n")
-                source.symlink_to(replacement)
-                with (
-                    patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
-                    patch.object(replay, "git_output", side_effect=[replay.BASE_REVISION, ""]),
-                ):
-                    with self.assertRaises(replay.ReplayError) as caught:
-                        replay.verify_source(self.root, replay.BASE_REVISION)
-                self.assertIn(target.as_posix(), str(caught.exception))
-                source.unlink()
-                source.write_text(f"/* synthetic source: {target} */\n")
+        for revision in replay.REVISIONS:
+            for target in replay.SOURCE_RELATIVE_PATHS:
+                with self.subTest(revision=revision, source=target):
+                    source = self.sources[target]
+                    source.unlink()
+                    replacement = self.root / f"synthetic-{target.name}"
+                    replacement.write_text("/* synthetic */\n")
+                    source.symlink_to(replacement)
+                    with (
+                        patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
+                        patch.object(replay, "git_output", side_effect=[revision, ""]),
+                    ):
+                        with self.assertRaises(replay.ReplayError) as caught:
+                            replay.verify_source(self.root, revision)
+                    self.assertIn(target.as_posix(), str(caught.exception))
+                    source.unlink()
+                    source.write_text(f"/* synthetic source: {target} */\n")
 
     def test_missing_source_is_refused_for_each_fenced_file(self) -> None:
-        for target in replay.SOURCE_RELATIVE_PATHS:
-            with self.subTest(source=target):
-                source = self.sources[target]
-                source.unlink()
-                with (
-                    patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
-                    patch.object(replay, "git_output", side_effect=[replay.BASE_REVISION, ""]),
-                ):
-                    with self.assertRaises(replay.ReplayError) as caught:
-                        replay.verify_source(self.root, replay.BASE_REVISION)
-                self.assertIn(target.as_posix(), str(caught.exception))
-                source.write_text(f"/* synthetic source: {target} */\n")
+        for revision in replay.REVISIONS:
+            for target in replay.SOURCE_RELATIVE_PATHS:
+                with self.subTest(revision=revision, source=target):
+                    source = self.sources[target]
+                    source.unlink()
+                    with (
+                        patch.object(replay, "SOURCE_SHA256", self.expected_hashes),
+                        patch.object(replay, "git_output", side_effect=[revision, ""]),
+                    ):
+                        with self.assertRaises(replay.ReplayError) as caught:
+                            replay.verify_source(self.root, revision)
+                    self.assertIn(target.as_posix(), str(caught.exception))
+                    source.write_text(f"/* synthetic source: {target} */\n")
 
 
 if __name__ == "__main__":

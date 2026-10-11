@@ -35,3 +35,15 @@ still identify NUT 2.8.5, libusb 1.0.30, checkout 7.0.1 and setup-python 7.0.0.
 NUT master still resolves to the experimental SHA above. No baseline or
 dependency was changed for the source archive; experimental NUT remains an
 explicit exception, not a stable dependency or bundled binary.
+
+## Upstream Replay Refresh
+
+On 2026-10-11 the official latest-release records still identify NUT 2.8.5
+and libusb 1.0.30. The observed NUT master has advanced to
+`73c4502191d025e35122463986a80c676e734b04`, now admitted only as the third
+exact source pin in the [offline HID replay](NUT_HID_REPLAY.md). This does
+not change the original full-driver/patch baseline in the table above.
+The guarded patch does not apply unchanged to the new master; see the
+[upstream review](NUT_UPSTREAM_STATUS.md). No new runtime dependency or
+driver binary has been adopted. Other toolchain versions were not refreshed
+by this bounded NUT review and need rechecking before another release.

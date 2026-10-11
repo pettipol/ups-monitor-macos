@@ -13,9 +13,11 @@ import sys
 
 BASE_REVISION = "1a8369f8688443a500527059167d2f66ca27535f"
 FIX_REVISION = "e0bb8ea64f7f8a140ad8908904186a05a324c295"
+MERGED_REVISION = "73c4502191d025e35122463986a80c676e734b04"
 REVISIONS = {
     BASE_REVISION: "base",
     FIX_REVISION: "fix",
+    MERGED_REVISION: "merged",
 }
 SOURCE_RELATIVE_PATH = Path("drivers/apcmicrolink-usb.c")
 PUBLISHER_SOURCE_RELATIVE_PATH = Path("drivers/apcmicrolink.c")
@@ -28,6 +30,10 @@ SOURCE_SHA256 = {
     FIX_REVISION: {
         SOURCE_RELATIVE_PATH: "5f4073e7597ce7b5f2fb2f9b2b3ebc49278eb78d29ec5e09b999896112a19a21",
         PUBLISHER_SOURCE_RELATIVE_PATH: "666a97bd870736a0b979a731225c4e41eb777d04e8ae786354a737a279561f19",
+    },
+    MERGED_REVISION: {
+        SOURCE_RELATIVE_PATH: "5f4073e7597ce7b5f2fb2f9b2b3ebc49278eb78d29ec5e09b999896112a19a21",
+        PUBLISHER_SOURCE_RELATIVE_PATH: "91e3921a8cfea955ffef0c1d38ada2ee48f2d3dc0c55e94d5c284766cd7c5e50",
     },
 }
 GENERATED_NAME = "hid_fallback_replay_generated.c"
@@ -52,7 +58,7 @@ def git_output(source_root: Path, *arguments: str) -> str:
 
 def verify_source(source_root: Path, expected_revision: str) -> tuple[str, dict[Path, bytes]]:
     if expected_revision not in REVISIONS:
-        raise ReplayError("expected revision must be one of the two pinned full hashes")
+        raise ReplayError("expected revision must be one of the three pinned full hashes")
 
     resolved = source_root.resolve(strict=True)
     if not resolved.is_dir():
@@ -245,14 +251,14 @@ def main() -> int:
         generated_unit = extract_translation_unit(source_files, args.expected_revision)
         with generated_path.open("x", encoding="utf-8") as generated_file:
             generated_file.write(generated_unit)
-        print(f"extracted exact {label} fallback source to {generated_path}")
+        print(f"extracted exact {label} ({args.expected_revision}) fallback source to {generated_path}")
         if args.action == "extract":
             return 0
 
         project_root = repository_root
         test_source = project_root / "backend/nut/test_hid_fallback_replay.c"
         binary_path = variant_dir / "test_hid_fallback_replay"
-        is_fix = "1" if label == "fix" else "0"
+        is_fix = "0" if label == "base" else "1"
         command = [
             "cc",
             "-std=c99",

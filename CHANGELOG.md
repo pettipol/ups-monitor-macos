@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a third exact source pin to the offline NUT HID fallback replay after
+  upstream PRs #3714 and #3728 merged. Source-fence coverage now includes all
+  three pins. Hardware compatibility and the full-driver baseline are unchanged.
 - Prevented the stored-history range picker's visible title from wrapping in
   the compact controls row; its accessibility group label remains available.
 - Recorded bounded production Apple-reader and history-export observations.
