@@ -1,5 +1,13 @@
 # Distribution readiness
 
+The [E122 recipient addendum](source-delivery/e122-first-io-2026-11-21/START_HERE.md)
+pairs the current public build sources with the corrected first-IO source
+companion and the private package's recorded identities. It includes the
+archive restore handoff and a package-specific runtime change summary.
+The four-file profile contains no binaries and does not close distribution,
+installation or hardware qualification. Historical delivery profiles remain
+unchanged.
+
 The optional [first-IO diagnostic source profile](../backend/nut/native-build/first-io-v1/README.md)
 is a later source-only candidate. It keeps the historical delivery identities
 below unchanged. Its patch reconstruction is separate from a native rebuild,
@@ -19,9 +27,9 @@ checks. The product was not launched. Current UI, real Stop, continuity and
 independent installation remain unqualified; no byte-for-byte reproducibility
 claim is made. The signed archive remains private. The runtime-notice manifest field
 `redistribution_review` remains `NOT_PERFORMED`; corresponding-source, license
-and notice review must finish before distribution. The earlier hosted run
-predates the first-IO integration. See [CI status](CI.md) for checks on the
-exact revision.
+and notice review must finish before distribution. See [CI status](CI.md)
+for dated source checks and their exact revisions; these do not establish
+distribution readiness.
 
 | Artifact reviewed | Contents and SHA-256 |
 |---|---|

@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "state": "TECHNICAL_RECIPIENT_PAIRING_REFERENCE_NOT_RELEASE_APPROVAL",
+  "public_source": {
+    "commit": "01e8e67e29db2fbf1ba7bcfb11f9aa32251323c3",
+    "tree": "d135251255d67943aae365231ffbd88633db6f8c",
+    "checkout_url": "https://github.com/pettipol/ups-monitor-macos/tree/01e8e67e29db2fbf1ba7bcfb11f9aa32251323c3",
+    "real_preview_guide": "https://github.com/pettipol/ups-monitor-macos/blob/01e8e67e29db2fbf1ba7bcfb11f9aa32251323c3/docs/REAL_PREVIEW_PACKAGE.md"
+  },
+  "e122_app_package": {
+    "filename": "UPS-Monitor-E122-macOS-local.tar.gz",
+    "sha256": "e48ae1588e1aea1509f863d997f78fa2a3fe07723ea41427d0ea57504200ee01",
+    "bytes": 12816229,
+    "tar_members": 85,
+    "runtime_manifest_sha256": "fc17aa831ea72af31dcdf2c39a8ab0e2f53552ddd73143e648390e79300dd4d5",
+    "runtime_notice_manifest_sha256": "29b970b594e4dc4098a4021ffb3292b7f44de2cf0f87c1492d7b3df2e2130290",
+    "signed_native_reader_sha256": "de0bb9570d3f96feda94db29d4c9e42dd4805caeb982a0c8b47cc3b10be12ec4",
+    "runtime_notice_files": 25,
+    "native_notice_files": 8,
+    "first_io_notice_sha256": "2c9eed60624d6b5108766c090aa9d210be3689e6b63846f98c0f66fa457e0262",
+    "redistribution_review": "NOT_PERFORMED",
+    "runtime_change_summary_in_archive": false
+  },
+  "e122_helper_payload": {
+    "helper_executable": {
+      "path": "Contents/Helpers/UPSOperationalHelper.app/Contents/MacOS/UPSOperationalHelper",
+      "bytes": 2053344,
+      "sha256": "5196e5ffbaa4ef638e8f5229db0dc523693ff429c0b8ba29bbfe0789d0648eee"
+    },
+    "libpython": {
+      "path": "Contents/Helpers/UPSOperationalHelper.app/Contents/Frameworks/libpython3.15.dylib",
+      "bytes": 20361632,
+      "sha256": "ffd41320665033f914dc13c6257864885963c4d87f6c0f658a734cb47d31bd0a"
+    },
+    "stdlib_zip": {
+      "path": "Contents/Helpers/UPSOperationalHelper.app/Contents/Resources/base_library.zip",
+      "bytes": 1424864,
+      "sha256": "528ab1e1c75fae2f608e7fa5d5023f5510117dd57fcc8950bb7328f279043c6f"
+    }
+  },
+  "e121_build_source_basis": {
+    "frozen_project_tar_sha256": "35d948308bb65fd22eecb44bda113efa1407e7ddcccbda9a33f4ad28e9e3806a",
+    "frozen_project_bytes": 6993920,
+    "snapshot_files": 563,
+    "unsigned_native_reader_sha256": "539d59e0d4669a8f85f3490fbfe91f3f6de6c357a781cf4cfd1d224791961563"
+  },
+  "e124_reader_runtime_source": {
+    "filename": "UPS-Monitor-E121-First-IO-Source.tar",
+    "sha256": "b76213d3cc42bc9c7726500108d03e2f11f399f0cdd53c265bbade0a984e366d",
+    "bytes": 41236480,
+    "recipe_files": 77,
+    "stage_files": {
+      "native_reader": 190,
+      "hidapi_vendor": 8,
+      "runtime_modules": 9
+    },
+    "stage_identity": {
+      "profile": "first-io-v1",
+      "native_base_manifest_sha256": "ac1e333cf6974791772a1272d648a2f599cbbcf368876a2b861af24f94de8411",
+      "native_postmap_sha256": "1cd2f2888d56fbf8cfa00f685aa3cfd0674e2a8e80877254ce8502057a602f02",
+      "profile_manifest_sha256": "a9350f0674a7f2aa26b61ad186e37d9d77204fa7ab672a65c4dadf066907c064",
+      "runtime_base_manifest_sha256": "191253602725c1e71a527821d518d70ee567cd25336867aec91c7cf73c467dcd",
+      "runtime_postmap_sha256": "909313f6be3d67da67c25b890dd0029997161837f8ffa049f394a2e43196a784",
+      "qualification_patch_sha256": "75e7a32a7032f07af8f97c78520389fa011320e26780da9066c237662892b1a9",
+      "vendor_map_sha256": "1bafcb90cbc8773f6fb77cbe28c422fb729fb03fdd3c69e5672ebc858e12457e",
+      "source_receipt_sha256": "2d997b8299c6d9b476427002a1866f8ee533446e012e85860dca9d5c20aa9f41"
+    },
+    "scope_note": "Reader/runtime corresponding-source candidate; does not include the current app/widget frontend."
+  },
+  "historical_e106_app_source": {
+    "filename": "UPS-Monitor-E96-E98-App-Source.tar",
+    "sha256": "41f5a4081a2964c3e55b964e082a5601ee22fb9d7d8b4a8357e8fff7e0e3c506",
+    "source_manifest_sha256": "73739a9001307e4a4dba71eb44f0d854daa1dfc1912702754143bb85dbc01794",
+    "matching_to_current_source": {
+      "frontend": "73/73 exact paths and bytes",
+      "tests": "80/80 exact paths and bytes",
+      "notice_inputs": "26/26 exact paths and bytes",
+      "runtime_recipe": "22/24 exact; two runtime preparation scripts differ"
+    },
+    "first_io_validator_and_profile_present": false,
+    "historical_zip_pin_note": "The immutable E106 source archive retains a truncated historical E96 ZIP metadata value. Do not use it as an identity; the full E96 ZIP digest is recorded from the checked regular member of the E96 app archive in RUNTIME_CHANGES.md.",
+    "use": "Historical source inputs only. Use the current public checkout and guide for changed runtime scripts and first-IO procedure."
+  },
+  "current_generated_source_changes": [
+    {
+      "path": "Sources/UPSRuntime/FrozenOperationalReleasePins.swift",
+      "before_sha256": "c786b0545c3a1f93903ea42333f0df25a3ca86c6ca3ecbdd9570ae5420ca0222",
+      "after_sha256": "f4844a5326593f961059fb9ca6197030ad9ccf5a4e6d1b330079ae4ea8ba4934"
+    },
+    {
+      "path": "UPSMonitor.xcodeproj/project.pbxproj",
+      "before_sha256": "92380e63b0325019b4621c9395bb78730226e817d7308fbaca8a5a881be923a1",
+      "after_sha256": "b4286ff8f46ff7ac1d654e3f13726a58a1d208d9a260260a1f4ce2e47d7bcfb7"
+    }
+  ],
+  "recipient_generated_inputs": [
+    "fresh native build and stage receipts",
+    "recipient-selected real bundle identifier",
+    "new compiled runtime manifest pin",
+    "private signing configuration"
+  ],
+  "scope": {
+    "app_execution": "NOT_RUN",
+    "driver_execution": "NOT_RUN",
+    "hardware": "NOT_RUN",
+    "widget_observation": "NOT_OBSERVED",
+    "publication": "NOT_RUN",
+    "redistribution_review": "NOT_PERFORMED"
+  }
+}

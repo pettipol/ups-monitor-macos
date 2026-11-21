@@ -4,6 +4,12 @@ This procedure assembles the real Apple Silicon preview from a source-built
 producer and the frozen helper. Building, signing and inspecting the package
 work with the UPS disconnected. The canonical Swift manifest pins stay nil.
 
+For the recorded first-IO package, use the frozen
+[E122 recipient addendum](source-delivery/e122-first-io-2026-11-21/START_HERE.md)
+to pair the reviewed public checkout, source companion and runtime notes.
+It distinguishes recipient-generated pins from the identities of the private
+reference package; following it does not authorize a USB trial.
+
 Choose the native source profile explicitly. `NATIVE_PROFILE=hidapi-0.15`
 uses the historical recipe below. `NATIVE_PROFILE=hidapi-0.16` uses the
 [fresh-build procedure](../backend/nut/native-build/hidapi-0.16/README.md)
