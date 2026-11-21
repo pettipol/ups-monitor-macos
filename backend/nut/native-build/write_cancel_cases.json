@@ -1,0 +1,12 @@
+[
+  "cancel-before-native",
+  "io-error-then-stop",
+  "short-write-then-stop",
+  "full-write-then-stop",
+  "hid-minus2-no-stop",
+  "hid-minus2-with-stop",
+  "sentinel-no-stop",
+  "sentinel-after-health-io",
+  "io-during-confirmation",
+  "cleanup-minus2-no-retry"
+]

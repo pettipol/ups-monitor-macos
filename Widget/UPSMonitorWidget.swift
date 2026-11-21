@@ -39,8 +39,7 @@ struct UPSWidgetProvider: TimelineProvider, Sendable {
         }
         do {
             let directory = try WidgetGroupConfiguration.directoryURL(fixtureMode: mode)
-            let store = try WidgetSnapshotStore(directoryURL: directory, mode: .readOnly)
-            let payload = try await store.read(now: date)
+            let payload = try WidgetSnapshotStore.readIfPresent(directoryURL: directory, now: date)
             return UPSWidgetEntry(date: date, payload: payload,
                                   unavailableReason: payload == nil ? "Awaiting first capture" : nil)
         } catch WidgetGroupError.notConfigured {

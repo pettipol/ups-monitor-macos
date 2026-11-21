@@ -1,0 +1,225 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -17,6 +17,7 @@
+ #include <limits.h>
+ #include <stdlib.h>
+ #include <stdint.h>
++#include <inttypes.h>
+ #include <stdarg.h>
+ #include <string.h>
+ #include <strings.h>
+@@ -300,6 +301,7 @@
+  * Never cleared by Stop/close: an admitted session must attempt cleanup STOP. */
+ static int operational_session_admitted = 0;
+ static int operational_cleanup_done = 0;
++static int operational_cleanup_diagnostic_emitted = 0;
+ static int operational_cleanup_ok = 0;
+ static void microlink_operational_cleanup(void);
+ static void microlink_operational_updateinfo(void);
+@@ -433,6 +435,19 @@
+ static int operational_have_slot = 0;
+ static mlink_operational_end_reason_t operational_end_reason = MLINK_OPERATIONAL_END_GUARD_ERROR;
+ static mlink_operational_freshness_t operational_freshness;
++_Static_assert(MLINK_OPERATIONAL_END_CANCELLED == 0
++	&& MLINK_OPERATIONAL_END_DEVICE_LOST == 1
++	&& MLINK_OPERATIONAL_END_SESSION_LOST == 2
++	&& MLINK_OPERATIONAL_END_GUARD_ERROR == 3
++	&& MLINK_OPERATIONAL_END_OUTPUT_ERROR == 4, "cleanup diagnostic end reason mapping changed");
++_Static_assert(MLINK_HEALTH_DISABLED == 0 && MLINK_HEALTH_STARTING == 1
++	&& MLINK_HEALTH_ACTIVE == 2 && MLINK_HEALTH_CLEANING == 3
++	&& MLINK_HEALTH_FINISHED == 4, "cleanup diagnostic health phase mapping changed");
++_Static_assert(MLINK_HEALTH_NONE == 0 && MLINK_HEALTH_STOP == 1
++	&& MLINK_HEALTH_STARTUP_DEADLINE == 2 && MLINK_HEALTH_PROGRESS_DEADLINE == 3
++	&& MLINK_HEALTH_CLOCK == 4 && MLINK_HEALTH_OVERFLOW == 5
++	&& MLINK_HEALTH_IO == 6 && MLINK_HEALTH_REFRESH == 7,
++	"cleanup diagnostic health reason mapping changed");
+ #else
+ typedef mlink_continuous_field_t mlink_collected_field_t;
+ #define mlink_collected_fields_clear mlink_continuous_fields_clear
+@@ -5826,13 +5841,58 @@
+ 	return 0;
+ }
+ 
++static void microlink_operational_emit_cleanup_diagnostic(
++	mlink_operational_end_reason_t reason_before, mlink_health_snapshot_t health_before,
++	int stop_ok, int released, int complete, int clock_ok,
++	mlink_health_snapshot_t health_after,
++	mlink_operational_cleanup_diagnostic_t diagnostic)
++{
++	char line[1025U];
++	char write_rc[16U];
++	char cleanup_delta_ms[32U];
++	int written;
++	if (operational_cleanup_diagnostic_emitted) return;
++	operational_cleanup_diagnostic_emitted=1;
++	if (diagnostic.write_rc_valid) {
++		written=snprintf(write_rc,sizeof(write_rc),"%d",diagnostic.write_rc);
++		if (written < 0 || (size_t)written >= sizeof(write_rc)) return;
++	} else {
++		memcpy(write_rc,"null",5U);
++	}
++	if (diagnostic.cleanup_delta_valid) {
++		written=snprintf(cleanup_delta_ms,sizeof(cleanup_delta_ms),"%" PRIu64,
++			diagnostic.cleanup_delta_ms);
++		if (written < 0 || (size_t)written >= sizeof(cleanup_delta_ms)) return;
++	} else {
++		memcpy(cleanup_delta_ms,"null",5U);
++	}
++	written=snprintf(line,sizeof(line),
++		"UPS_CLEANUP_DIAG_V1 {\"v\":1,\"reason_before\":%d,\"reason_after\":%d,"
++		"\"phase_before\":%d,\"health_before\":%d,\"phase_after\":%d,\"health_after\":%d,"
++		"\"admitted\":%d,\"stop_ok\":%d,\"released\":%d,\"complete\":%d,\"clock_ok\":%d,"
++		"\"cleanup_attempted\":%d,\"cleanup_failed\":%d,\"write_called\":%d,\"write_kind\":%d,"
++		"\"write_rc\":%s,\"cleanup_delta_ms\":%s}\n",
++		(int)reason_before, (int)operational_end_reason,
++		(int)health_before.phase, (int)health_before.reason,
++		(int)health_after.phase, (int)health_after.reason,
++		operational_session_admitted != 0, stop_ok != 0, released != 0, complete != 0, clock_ok != 0,
++		diagnostic.cleanup_attempted != 0, health_after.cleanup_failed != 0,
++		diagnostic.write_called != 0, diagnostic.write_kind, write_rc, cleanup_delta_ms);
++	if (written < 0 || (size_t)written > 1024U) return;
++	(void)fwrite(line,1U,(size_t)written,stderr);
++}
++
+ static void microlink_operational_cleanup(void)
+ {
+ 	int stop_ok, clock_ok, released, complete;
+ 	uint64_t elapsed_ms;
+-	mlink_health_snapshot_t health;
++	mlink_health_snapshot_t health_before, health_after;
++	mlink_operational_cleanup_diagnostic_t diagnostic;
++	mlink_operational_end_reason_t reason_before;
+ 	if (operational_cleanup_done) return;
+ 	operational_cleanup_done=1;
++	reason_before=operational_end_reason;
++	health_before=mlink_shared_operational_snapshot();
+ 	if (operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED)
+ 		mlink_shared_operational_stop();
+ 	else mlink_shared_operational_fail();
+@@ -5849,11 +5909,15 @@
+ 	if (clock_ok) continuous_last_elapsed_ms=elapsed_ms;
+ 	continuous_cleanup_clock_ok=clock_ok;
+ 	operational_cleanup_ok=stop_ok && released && complete && clock_ok;
+-	health=mlink_shared_operational_snapshot();
++	health_after=mlink_shared_operational_snapshot();
+ 	if (operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED
+-	 && health.reason!=MLINK_HEALTH_STOP)
++	 && health_after.reason!=MLINK_HEALTH_STOP)
+ 		operational_end_reason=MLINK_OPERATIONAL_END_GUARD_ERROR;
+ 	if (!operational_cleanup_ok) operational_end_reason=MLINK_OPERATIONAL_END_GUARD_ERROR;
++	health_after=mlink_shared_operational_snapshot();
++	diagnostic=mlink_shared_operational_cleanup_diagnostic();
++	microlink_operational_emit_cleanup_diagnostic(reason_before,health_before,
++		stop_ok,released,complete,clock_ok,health_after,diagnostic);
+ }
+ 
+ int apcmicrolink_operational_stream_v2_run(void)
+--- a/drivers/apcmicrolink-hidapi-shared.c
++++ b/drivers/apcmicrolink-hidapi-shared.c
+@@ -58,6 +58,8 @@
+ 	mlink_health_reason_t health_reason;
+ 	int cleanup_failed;
+ 	int cleanup_write_inflight;
++	int cleanup_callback_called;
++	int cleanup_callback_result;
+ 	int cleanup_deadline_valid;
+ 	int64_t cleanup_deadline_ms;
+ 	uint64_t publications;
+@@ -569,6 +571,42 @@
+ 	return result;
+ }
+ 
++mlink_operational_cleanup_diagnostic_t mlink_shared_operational_cleanup_diagnostic(void)
++{
++	mlink_operational_cleanup_diagnostic_t result = {0};
++	int64_t cleanup_started_ms;
++	uint64_t delta_ms;
++	result.cleanup_attempted = state.cleanup_stop_attempted != 0;
++	result.write_called = state.cleanup_callback_called != 0;
++	if (result.write_called) {
++		if (state.cleanup_callback_result < 0) {
++			result.write_kind = 1;
++			result.write_rc = -1;
++			result.write_rc_valid = 1;
++		} else if (state.cleanup_callback_result < (int)REPORT_SIZE) {
++			result.write_kind = 2;
++			result.write_rc = state.cleanup_callback_result;
++			result.write_rc_valid = 1;
++		} else if (state.cleanup_callback_result == (int)REPORT_SIZE) {
++			result.write_kind = 3;
++			result.write_rc = (int)REPORT_SIZE;
++			result.write_rc_valid = 1;
++		} else {
++			result.write_kind = 4;
++		}
++	}
++	if (!state.cleanup_deadline_valid || !state.finish_clock_valid
++	 || state.cleanup_deadline_ms < 2000
++	 || state.finish_clock_ms < state.cleanup_deadline_ms - 2000
++	 || state.finish_clock_ms < state.last_clock_ms) return result;
++	cleanup_started_ms = state.cleanup_deadline_ms - 2000;
++	delta_ms = (uint64_t)(state.finish_clock_ms - cleanup_started_ms);
++	if (delta_ms > MLINK_OPERATIONAL_MAX_ELAPSED) return result;
++	result.cleanup_delta_ms = delta_ms;
++	result.cleanup_delta_valid = 1;
++	return result;
++}
++
+ int mlink_shared_cleanup_stop_write_authorized(void *user)
+ {
+ 	return state.cleanup_write_inflight && state.in_api > 0
+@@ -871,6 +909,9 @@
+ 	unsigned char outgoing[REPORT_SIZE];
+ 	ssize_t count;
+ 	int64_t now;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	int capture_cleanup_callback = 0;
++#endif
+ 	if (cleanup_stop) {
+ #ifdef MLINK_HIDAPI_OPERATIONAL_V2
+ 		if (state.health_phase != MLINK_HEALTH_DISABLED) {
+@@ -912,8 +953,18 @@
+ #ifdef MLINK_HIDAPI_OPERATIONAL_V2
+ 	if (cleanup_stop && state.health_phase != MLINK_HEALTH_DISABLED)
+ 		state.cleanup_write_inflight = 1;
++	if (cleanup_stop && state.health_phase != MLINK_HEALTH_DISABLED) {
++		state.cleanup_callback_called = 1;
++		capture_cleanup_callback = 1;
++	}
+ #endif
+ 	count = state.ops->write_report(state.user, outgoing, sizeof(outgoing));
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (capture_cleanup_callback) {
++		state.cleanup_callback_result = count < 0 ? -1
++			: count > (ssize_t)REPORT_SIZE ? (int)REPORT_SIZE + 1 : (int)count;
++	}
++#endif
+ #ifdef MLINK_HIDAPI_OPERATIONAL_V2
+ 	state.cleanup_write_inflight = 0;
+ #endif
+--- a/drivers/apcmicrolink-hidapi-session.h
++++ b/drivers/apcmicrolink-hidapi-session.h
+@@ -24,6 +24,15 @@
+ 	int cleanup_stop_attempted;
+ 	uint64_t publications;
+ } mlink_health_snapshot_t;
++typedef struct mlink_operational_cleanup_diagnostic {
++	int cleanup_attempted;
++	int write_called;
++	int write_kind;
++	int write_rc_valid;
++	int write_rc;
++	int cleanup_delta_valid;
++	uint64_t cleanup_delta_ms;
++} mlink_operational_cleanup_diagnostic_t;
+ /* Local-only opt-in; no HID calls. Begin once, before open; never renews the
+  * original elapsed anchor. Native callers use prepare_native_v2 instead. */
+ int mlink_shared_operational_begin(void);
+@@ -43,6 +52,7 @@
+  * session failure even when resource cleanup succeeded. */
+ int mlink_shared_operational_cleanup_complete(void);
+ mlink_health_snapshot_t mlink_shared_operational_snapshot(void);
++mlink_operational_cleanup_diagnostic_t mlink_shared_operational_cleanup_diagnostic(void);
+ #endif
+ 
+ #if defined(MLINK_HIDAPI_NATIVE_CANDIDATE) && defined(MLINK_HIDAPI_SHARED_TEST)

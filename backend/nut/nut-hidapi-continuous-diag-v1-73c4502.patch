@@ -1,0 +1,933 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -17,6 +17,7 @@
+ #include <limits.h>
+ #include <stdlib.h>
+ #include <stdint.h>
++#include <stdarg.h>
+ #include <string.h>
+ #include <strings.h>
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+@@ -24,6 +25,9 @@
+ #include <math.h>
+ #include <stdio.h>
+ #include <errno.h>
++#ifndef WIN32
++#include <unistd.h>
++#endif
+ #include <sys/select.h>
+ #ifdef __APPLE__
+ #include <xlocale.h>
+@@ -41,6 +45,11 @@
+ #ifdef WITH_USB
+ #include "apcmicrolink-usb.h"
+ #endif /* WITH_USB */
++#if defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1) \
++	&& (!defined(MLINK_HIDAPI_CONTINUOUS_CANDIDATE) \
++		|| !defined(MLINK_HIDAPI_NATIVE_CANDIDATE) || defined(WIN32))
++#error "Continuous diagnostics require the native macOS continuous candidate"
++#endif
+ #ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
+ #if !defined(WITH_USB) || !WITH_LIBUSB_1_0 || WITH_LIBUSB_0_1
+ #error "The isolated HIDAPI candidate requires the real NUT USB1 configuration"
+@@ -392,7 +401,219 @@
+ static int continuous_cleanup_done = 0;
+ static int continuous_cleanup_ok = 0;
+ static int continuous_cleanup_clock_ok = 0;
++#if defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1) && !defined(WIN32)
++/* Private, opt-in counters.  They observe existing seams and never drive a
++ * transport or alter the continuous public protocol. */
++enum {
++	DIAG_POLL_ATTEMPT, DIAG_POLL_OK, DIAG_POLL_FAILED, DIAG_POLL_GUARD_EXIT,
++	DIAG_POLL_PRIME_FAILED, DIAG_NEXT_ATTEMPT, DIAG_NEXT_OK, DIAG_NEXT_FAILED,
++	DIAG_NEXT_GUARD_EXIT, DIAG_RECEIVE_ATTEMPT, DIAG_RECEIVE_OK,
++	DIAG_RECEIVE_GUARD_EXIT, DIAG_RECEIVE_READ_ERROR, DIAG_RECEIVE_TIMEOUT,
++	DIAG_RECEIVE_PROCESS_REJECT, DIAG_RECEIVE_OVERFLOW_RESET,
++	DIAG_SCAN_CHECKSUM_REJECT, DIAG_SCAN_OVERSIZE_REJECT, DIAG_SCAN_RESYNC_DROP,
++	DIAG_FRAME_PROCESSED, DIAG_FRAME_CHECKSUM_REJECT, DIAG_CACHE_ACCEPTED,
++	DIAG_CACHE_SHORT_REJECT, DIAG_CACHE_PAGE0_IMPLAUSIBLE, DIAG_CACHE_TIME_INVALID,
++	DIAG_CACHE_GEOMETRY_CHANGED, DIAG_BLOB_ATTEMPT, DIAG_BLOB_OK,
++	DIAG_BLOB_UNSUPPORTED, DIAG_BLOB_EMPTY_GEOMETRY, DIAG_BLOB_DEFINITION_REJECT,
++	DIAG_CAPTURE_CALLED, DIAG_CAPTURE_OBSERVED,
++	DIAG_CAPTURE_UNAVAILABLE, DIAG_CAPTURE_INVALID, DIAG_PUBLICATION_SAMPLES,
++	DIAG_PUBLICATION_DYNAMIC_ADVANCED, DIAG_COUNTER_COUNT
++};
++static uint32_t continuous_diag_counters[DIAG_COUNTER_COUNT];
++static int continuous_diag_saturated = 0;
++static int continuous_diag_time_saturated = 0;
++static int continuous_diag_emitted = 0;
++static int continuous_diag_cleanup_invoked = 0;
++static const char *continuous_diag_stop_state = "not_reached";
++static const char *continuous_diag_finish_state = "not_called";
++static int continuous_diag_terminal_time_defined = 0;
++static int continuous_diag_duration_overridden = 0;
++static const char *continuous_diag_first_site = "not_observed";
++static const char *continuous_diag_last_success_source = "none";
++static int continuous_diag_last_success_assigned = 0;
++static int continuous_diag_last_age_defined = 0;
++static double continuous_diag_last_age = 0.0;
++static int continuous_diag_cache_time_defined = 0;
++static uint32_t continuous_diag_cache_first_ms = 0U;
++static uint32_t continuous_diag_cache_last_ms = 0U;
++static int continuous_diag_previous_dynamic_defined = 0;
++static uint32_t continuous_diag_previous_dynamic_min = 0U;
++static int continuous_diag_publication_dynamic_defined = 0;
++static uint32_t continuous_diag_publication_dynamic_min = 0U;
++static uint32_t continuous_diag_publication_dynamic_max = 0U;
++static unsigned int continuous_diag_publication_dynamic_count = 0U;
++static int continuous_diag_blob_rows_defined = 0;
++static unsigned int continuous_diag_blob_rows_min = 0U;
++static unsigned int continuous_diag_blob_rows_max = 0U;
++
++static void microlink_diag_increment(unsigned int counter)
++{
++	if (!continuous_mode || counter >= DIAG_COUNTER_COUNT) return;
++	/* The flag means an increment was discarded, not merely that the exact
++	 * representable maximum was reached. */
++	if (continuous_diag_counters[counter] == UINT32_MAX) {
++		continuous_diag_saturated = 1;
++		return;
++	}
++	continuous_diag_counters[counter]++;
++}
++
++static uint32_t microlink_diag_time(uint64_t value)
++{
++	if (value > UINT32_MAX) {
++		continuous_diag_time_saturated = 1;
++		return UINT32_MAX;
++	}
++	return (uint32_t)value;
++}
++
++static void microlink_diag_blob_rows(unsigned int rows)
++{
++	if (!continuous_mode) return;
++	if (!continuous_diag_blob_rows_defined) {
++		continuous_diag_blob_rows_min = rows;
++		continuous_diag_blob_rows_max = rows;
++		continuous_diag_blob_rows_defined = 1;
++	} else {
++		if (rows < continuous_diag_blob_rows_min) continuous_diag_blob_rows_min = rows;
++		if (rows > continuous_diag_blob_rows_max) continuous_diag_blob_rows_max = rows;
++	}
++}
++
++static void microlink_diag_note_site(const char *site)
++{
++	if (continuous_mode && !continuous_terminal_latched
++	 && continuous_diag_first_site[0] == 'n')
++		continuous_diag_first_site = site;
++}
++
++static int microlink_diag_append(char *buffer, size_t capacity, size_t *used,
++	const char *format, ...)
++{
++	int written;
++	va_list args;
++	if (*used >= capacity) return 0;
++	va_start(args, format);
++	written = vsnprintf(buffer + *used, capacity - *used, format, args);
++	va_end(args);
++	if (written < 0 || (size_t)written >= capacity - *used) return 0;
++	*used += (size_t)written;
++	return 1;
++}
++
++static void microlink_diag_emit_summary(void)
++{
++	static const char *const names[DIAG_COUNTER_COUNT] = {
++		"poll.attempt", "poll.ok", "poll.failed", "poll.guard_exit", "poll.prime_failed",
++		"next.attempt", "next.ok", "next.failed", "next.guard_exit",
++		"receive.attempt", "receive.ok", "receive.guard_exit", "receive.read_error",
++		"receive.timeout", "receive.process_reject", "receive.overflow_reset",
++		"scan.checksum_candidate_reject", "scan.oversize_candidate_reject", "scan.resync_drop_events",
++		"frame.processed", "frame.checksum_reject", "cache.accepted", "cache.short_reject",
++		"cache.page0_implausible", "cache.time_invalid", "cache.geometry_changed",
++		"blob.attempt", "blob.ok", "blob.unsupported", "blob.empty_geometry",
++		"blob.definition_reject", "capture.called", "capture.observed",
++		"capture.unavailable", "capture.invalid", "publication.samples", "publication.dynamic_min_advanced"
++	};
++	char line[4097];
++	size_t used = 0U;
++	unsigned int i;
++	int ok;
++	uint32_t terminal_ms = 0U;
++	const char *finish_called = "false";
++	const char *reason = "guard_error";
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	finish_called = hidapi_finish_called ? "true" : "false";
++#endif
++	if (!continuous_mode || continuous_diag_emitted) return;
++	continuous_diag_emitted = 1;
++	if (continuous_diag_terminal_time_defined)
++		terminal_ms = microlink_diag_time(continuous_last_elapsed_ms);
++	switch (continuous_end_reason) {
++	case MLINK_CONTINUOUS_END_DURATION_COMPLETE: reason = "duration_complete"; break;
++	case MLINK_CONTINUOUS_END_CANCELLED: reason = "cancelled"; break;
++	case MLINK_CONTINUOUS_END_DEVICE_LOST: reason = "device_lost"; break;
++	case MLINK_CONTINUOUS_END_SESSION_LOST: reason = "session_lost"; break;
++	case MLINK_CONTINUOUS_END_GUARD_ERROR: reason = "guard_error"; break;
++	case MLINK_CONTINUOUS_END_OUTPUT_ERROR: reason = "output_error"; break;
++	}
++	ok = microlink_diag_append(line, sizeof(line), &used,
++		"MLINK_DIAG_V1 {\"schema\":1,\"complete\":true,\"saturated\":%s,\"time_saturated\":%s,\"counters\":{",
++		continuous_diag_saturated ? "true" : "false",
++		continuous_diag_time_saturated ? "true" : "false");
++	for (i = 0U; ok && i < DIAG_COUNTER_COUNT; i++) {
++		ok = microlink_diag_append(line, sizeof(line), &used, "%s\"%s\":%u",
++			i == 0U ? "" : ",", names[i], (unsigned int)continuous_diag_counters[i]);
++	}
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		"},\"cache.first_ms\":");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_cache_time_defined ? "%u" : "null",
++		(unsigned int)continuous_diag_cache_first_ms);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used, ",\"cache.last_ms\":");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_cache_time_defined ? "%u" : "null",
++		(unsigned int)continuous_diag_cache_last_ms);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"blob.rows_copied_min\":");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_blob_rows_defined ? "%u" : "null",
++		continuous_diag_blob_rows_min);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used, ",\"blob.rows_copied_max\":");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_blob_rows_defined ? "%u" : "null",
++		continuous_diag_blob_rows_max);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"publication.dynamic_count_last\":%u,\"publication.observed_min_ms_last\":",
++		continuous_diag_publication_dynamic_count);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_publication_dynamic_defined ? "%u" : "null",
++		(unsigned int)continuous_diag_publication_dynamic_min);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"publication.observed_max_ms_last\":");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_publication_dynamic_defined ? "%u" : "null",
++		(unsigned int)continuous_diag_publication_dynamic_max);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"terminal.first_site\":\"%s\",\"terminal.final_reason\":\"%s\",\"terminal.elapsed_ms\":",
++		continuous_diag_first_site, reason);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_terminal_time_defined ? "%u" : "null",
++		(unsigned int)terminal_ms);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"terminal.session_ready\":%s,\"terminal.consecutive_timeouts\":%u,\"last_success.source\":\"%s\",\"last_success.defined\":%s,\"last_success.age_s_at_idle_check\":",
++		session_ready ? "true" : "false", consecutive_timeouts,
++		continuous_diag_last_success_source,
++		continuous_diag_last_success_assigned && last_poll_success != 0 ? "true" : "false");
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		continuous_diag_last_age_defined ? "%.0f" : "null", continuous_diag_last_age);
++	if (ok) ok = microlink_diag_append(line, sizeof(line), &used,
++		",\"cleanup.invoked\":%s,\"cleanup.stop_state\":\"%s\",\"cleanup.finish_called\":%s,\"cleanup.finish_state\":\"%s\",\"cleanup.clock_ok\":%s,\"cleanup.ok\":%s,\"cleanup.done\":%s,\"cleanup.duration_reason_overridden\":%s}\n",
++		continuous_diag_cleanup_invoked ? "true" : "false", continuous_diag_stop_state,
++		finish_called, continuous_diag_finish_state,
++		continuous_cleanup_clock_ok ? "true" : "false", continuous_cleanup_ok ? "true" : "false",
++		continuous_cleanup_done ? "true" : "false",
++		continuous_diag_duration_overridden ? "true" : "false");
++	if (!ok || used > 4095U) {
++		static const char overflow[] = "MLINK_DIAG_V1 {\"schema\":1,\"complete\":false,\"overflow\":true}\n";
++		(void)write(STDERR_FILENO, overflow, sizeof(overflow) - 1U);
++		return;
++	}
++	(void)write(STDERR_FILENO, line, used);
++}
++#define MLINK_DIAG_INC(counter) microlink_diag_increment(counter)
++#define MLINK_DIAG_SITE(site) microlink_diag_note_site(site)
++#else
++#define MLINK_DIAG_INC(counter) ((void)0)
++#define MLINK_DIAG_SITE(site) ((void)0)
++static void microlink_diag_blob_rows(unsigned int rows) { NUT_UNUSED_VARIABLE(rows); }
++#endif
+ #endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
++#ifndef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++#define MLINK_DIAG_INC(counter) ((void)0)
++#define MLINK_DIAG_SITE(site) ((void)0)
++static void microlink_diag_blob_rows(unsigned int rows) { NUT_UNUSED_VARIABLE(rows); }
++#endif
+ static int show_internals = -1;
+ static int show_unmapped = -1;
+ static const char *const outlet_suffixes[] = {
+@@ -810,7 +1031,16 @@
+ 		if (last_poll_success == 0) {
+ 			return consecutive_timeouts >= microlink_handshake_retries();
+ 		}
+-		return difftime(now, last_poll_success) >= MLINK_USB_MIDSESSION_IDLE_SEC;
++		{
++			double age = difftime(now, last_poll_success);
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++			if (continuous_mode && isfinite(age)) {
++				continuous_diag_last_age = age;
++				continuous_diag_last_age_defined = 1;
++			}
++#endif
++			return age >= MLINK_USB_MIDSESSION_IDLE_SEC;
++		}
+ 	}
+ #else	/* !WITH_USB */
+ 	/* Only the USB path has a mid-session idle notion to compare against. */
+@@ -821,17 +1051,30 @@
+ 
+ static int microlink_prime_poll(void)
+ {
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++	MLINK_DIAG_INC(DIAG_NEXT_ATTEMPT);
++#endif
+ #ifdef WITH_USB
+-	if (is_usb && microlink_guard_deadline_expired())
+-		return 0;
++	if (is_usb && microlink_guard_deadline_expired()) {
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		MLINK_DIAG_INC(DIAG_NEXT_GUARD_EXIT);
++#endif
++		return 0;
++	}
+ #endif /* WITH_USB */
+ 	if (!microlink_send_simple(MLINK_NEXT_BYTE)) {
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		MLINK_DIAG_INC(DIAG_NEXT_FAILED);
++#endif
+ 		ser_comm_fail("microlink: failed to send poll byte");
+ 		poll_primed = 0;
+ 		return 0;
+ 	}
+ 
+ 	poll_primed = 1;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++	MLINK_DIAG_INC(DIAG_NEXT_OK);
++#endif
+ 	return 1;
+ }
+ 
+@@ -2116,6 +2359,7 @@
+ 	int index = microlink_continuous_field_index(name, &kind);
+ 	NUT_UNUSED_VARIABLE(path);
+ 	if (index < 0) return;
++	MLINK_DIAG_INC(DIAG_CAPTURE_CALLED);
+ 	field = &continuous_fields[index];
+ 	if (!decoded || usage == NULL || usage->skipped
+ 	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
+@@ -2123,6 +2367,7 @@
+ 		&observed_ms)
+ 	 || observed_ms > 119999U) {
+ 		mlink_continuous_field_unavailable(field, kind);
++		MLINK_DIAG_INC(DIAG_CAPTURE_UNAVAILABLE);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+ 		return;
+@@ -2130,12 +2375,14 @@
+ 	value = dstate_getinfo(name);
+ 	if (value == NULL) {
+ 		mlink_continuous_field_unavailable(field, kind);
++		MLINK_DIAG_INC(DIAG_CAPTURE_UNAVAILABLE);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+ 		return;
+ 	}
+ 	if (!microlink_continuous_normalize_number(value, wire_value)) {
+ 		mlink_continuous_field_invalid(field, kind);
++		MLINK_DIAG_INC(DIAG_CAPTURE_INVALID);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+ 		return;
+@@ -2143,6 +2390,9 @@
+ 	if (!mlink_continuous_field_observed(field, kind, wire_value,
+ 		(uint32_t)observed_ms)) {
+ 		mlink_continuous_field_invalid(field, kind);
++		MLINK_DIAG_INC(DIAG_CAPTURE_INVALID);
++	} else {
++		MLINK_DIAG_INC(DIAG_CAPTURE_OBSERVED);
+ 	}
+ 	if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE) {
+ 		microlink_continuous_mirror_temperature();
+@@ -2871,6 +3121,7 @@
+ 	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
+ 		page0.width, descriptor_blob_len, 12U, data_ptr_offset - 12U, &ignored_time)) {
+ 		continuous_guard_error = 1;
++		MLINK_DIAG_SITE("apc_2874");
+ 		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		return 0;
+ 	}
+@@ -2906,6 +3157,7 @@
+ 		upsdebugx(1, "apcmicrolink: continuous geometry check failed geometry=%d dependency=%d bytes=%d",
+ 			geometry_ok, dependency_ok, bytes_ok);
+ 		continuous_guard_error = 1;
++		MLINK_DIAG_SITE("apc_2909");
+ 		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		return 0;
+ 	}
+@@ -2916,13 +3168,19 @@
+ static int microlink_update_blob(void)
+ {
+ 	unsigned int row;
++	unsigned int rows_copied = 0U;
++	MLINK_DIAG_INC(DIAG_BLOB_ATTEMPT);
+ 
+ 	if ((page0.flags & MLINK_PAGE0_FLAG_DESCRIPTOR_PRESENT) == 0U
+ 	 || page0.descriptor_version != 0x01U) {
++		MLINK_DIAG_INC(DIAG_BLOB_UNSUPPORTED);
++		microlink_diag_blob_rows(0U);
+ 		return 0;
+ 	}
+ 
+ 	if (page0.width == 0 || page0.count == 0) {
++		MLINK_DIAG_INC(DIAG_BLOB_EMPTY_GEOMETRY);
++		microlink_diag_blob_rows(0U);
+ 		return 0;
+ 	}
+ 
+@@ -2958,6 +3216,7 @@
+ 		}
+ 
+ 		memcpy(descriptor_blob + dst, obj->data, copylen);
++		rows_copied++;
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		continuous_blob_pages[row] = continuous_object_pages[row];
+ 		continuous_blob_pages[row].copied_len = copylen;
+@@ -2968,10 +3227,14 @@
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	if (continuous_mode && continuous_geometry_admitted
+ 	 && !microlink_continuous_check_definition()) {
+-		return 0;
+-	}
+-#endif
+-
++		MLINK_DIAG_INC(DIAG_BLOB_DEFINITION_REJECT);
++		microlink_diag_blob_rows(rows_copied);
++		return 0;
++	}
++#endif
++
++	MLINK_DIAG_INC(DIAG_BLOB_OK);
++	microlink_diag_blob_rows(rows_copied);
+ 	return 1;
+ }
+ 
+@@ -2992,6 +3255,7 @@
+ 		if (continuous_mode && protocol->seen
+ 		 && (page0.flags & MLINK_PAGE0_FLAG_DESCRIPTOR_PRESENT) != 0U) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_2995");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		}
+ #endif
+@@ -3002,6 +3266,7 @@
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		if (continuous_mode) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_3005");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		}
+ #endif
+@@ -3014,6 +3279,7 @@
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		if (continuous_mode) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_3017");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		}
+ #endif
+@@ -3027,6 +3293,7 @@
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		if (continuous_mode) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_3030");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 		}
+ #endif
+@@ -3052,6 +3319,7 @@
+ 	size_t datalen;
+ 
+ 	if (len < 3) {
++		MLINK_DIAG_INC(DIAG_CACHE_SHORT_REJECT);
+ 		return;
+ 	}
+ 
+@@ -3070,6 +3338,7 @@
+ 	 * and the resulting checksum-valid "page 0" announced width 247 inside
+ 	 * a 16-byte frame. */
+ 	if (id == MLINK_OBJ_PROTOCOL && datalen >= 3 && (size_t)frame[2] != datalen) {
++		MLINK_DIAG_INC(DIAG_CACHE_PAGE0_IMPLAUSIBLE);
+ 		upsdebugx(1, "microlink: ignoring implausible page0 - announces width "
+ 			"%u but arrived in a %" PRIuSIZE "-byte frame; keeping the "
+ 			"previous page0 (width %" PRIuSIZE ")",
+@@ -3081,15 +3350,26 @@
+ 	obj->seen = 1;
+ 	obj->len = datalen;
+ 	memcpy(obj->data, frame + 1, obj->len);
++	MLINK_DIAG_INC(DIAG_CACHE_ACCEPTED);
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	if (continuous_mode) {
+ 		uint64_t received_ms;
+ 		if (!microlink_usb_guard_elapsed_ms(&received_ms)
+ 		 || received_ms > 119999U) {
++			MLINK_DIAG_INC(DIAG_CACHE_TIME_INVALID);
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_3090");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			continuous_object_pages[id].received_valid = 0;
+ 		} else {
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++			uint32_t stamped_ms = microlink_diag_time(received_ms);
++			if (!continuous_diag_cache_time_defined) {
++				continuous_diag_cache_first_ms = stamped_ms;
++				continuous_diag_cache_time_defined = 1;
++			}
++			continuous_diag_cache_last_ms = stamped_ms;
++#endif
+ 			continuous_object_pages[id].received_ms = received_ms;
+ 			continuous_object_pages[id].received_valid = 1;
+ 			continuous_object_pages[id].copied_valid = 0;
+@@ -3115,7 +3395,9 @@
+ 			unsigned char current_geometry[16];
+ 			microlink_continuous_geometry_bytes(current_geometry);
+ 			if (memcmp(current_geometry, continuous_geometry, sizeof(current_geometry)) != 0) {
++				MLINK_DIAG_INC(DIAG_CACHE_GEOMETRY_CHANGED);
+ 				continuous_guard_error = 1;
++				MLINK_DIAG_SITE("apc_3119");
+ 				microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			}
+ 		}
+@@ -3240,10 +3522,12 @@
+ 	}
+ 
+ 	if (current_framelen > MLINK_MAX_FRAME) {
++		MLINK_DIAG_INC(DIAG_SCAN_OVERSIZE_REJECT);
+ 		return 0;
+ 	}
+ 
+ 	if (!microlink_checksum_valid(sourcebuf, current_framelen)) {
++		MLINK_DIAG_INC(DIAG_SCAN_CHECKSUM_REJECT);
+ 		return 0;
+ 	}
+ 
+@@ -3285,6 +3569,7 @@
+ 	
+ 	if (rxbuf_len >= sizeof(rxbuf)) {
+ 		size_t drop_len = rxbuf_len - (MLINK_RECORD_LEN - 1);
++		MLINK_DIAG_INC(DIAG_SCAN_RESYNC_DROP);
+ 
+ 		upsdebugx(1, "microlink: dropping %u bytes while resynchronizing",
+ 			(unsigned int)drop_len);
+@@ -3474,7 +3759,9 @@
+ 
+ static int microlink_process_frame(const unsigned char *frame, size_t framelen)
+ {
++	MLINK_DIAG_INC(DIAG_FRAME_PROCESSED);
+ 	if (!microlink_checksum_valid(frame, framelen)) {
++		MLINK_DIAG_INC(DIAG_FRAME_CHECKSUM_REJECT);
+ 		ser_comm_fail("microlink: checksum failure on object 0x%02X", frame[0]);
+ 		return 0;
+ 	}
+@@ -3518,6 +3805,8 @@
+ 	size_t framelen = 0;
+ 	st_tree_timespec_t start;
+ 	useconds_t read_timeout_usec = MLINK_READ_TIMEOUT_USEC;
++	int terminal_result;
++	MLINK_DIAG_INC(DIAG_RECEIVE_ATTEMPT);
+ 
+ #ifdef WITH_USB
+ 	if (is_usb) {
+@@ -3533,6 +3822,7 @@
+ 
+ #ifdef WITH_USB
+ 		if (is_usb && microlink_guard_deadline_expired()) {
++			MLINK_DIAG_INC(DIAG_RECEIVE_GUARD_EXIT);
+ 			return 0;
+ 		}
+ #endif /* WITH_USB */
+@@ -3545,7 +3835,9 @@
+ 				microlink_usb_drop_report_padding();
+ 			}
+ #endif /* WITH_USB */
+-			return microlink_process_frame(frame, framelen);
++			terminal_result = microlink_process_frame(frame, framelen);
++			MLINK_DIAG_INC(terminal_result ? DIAG_RECEIVE_OK : DIAG_RECEIVE_PROCESS_REJECT);
++			return terminal_result;
+ 		}
+ 
+ #ifdef WITH_USB
+@@ -3558,11 +3850,13 @@
+ 		}
+ 
+ 		if (ret < 0) {
++			MLINK_DIAG_INC(DIAG_RECEIVE_READ_ERROR);
+ 			return 0;
+ 		}
+ 
+ 		if (ret == 0) {
+ 			if (microlink_timeout_expired(&start, 0, read_timeout_usec)) {
++				MLINK_DIAG_INC(DIAG_RECEIVE_TIMEOUT);
+ 				return 0;
+ 			}
+ 			continue;
+@@ -3572,6 +3866,7 @@
+ 			rxbuf[rxbuf_len++] = ch;
+ 			upsdebug_hex(5, "microlink RX byte", &ch, 1);
+ 		} else {
++			MLINK_DIAG_INC(DIAG_RECEIVE_OVERFLOW_RESET);
+ 			upsdebugx(1, "microlink: receive buffer overflow, resetting parser");
+ 			rxbuf_len = 0;
+ 		}
+@@ -3580,19 +3875,30 @@
+ 
+ static int microlink_poll_once(time_t now)
+ {
++	MLINK_DIAG_INC(DIAG_POLL_ATTEMPT);
+ #ifdef WITH_USB
+-	if (is_usb && microlink_guard_deadline_expired())
+-		return 0;
++	if (is_usb && microlink_guard_deadline_expired()) {
++		MLINK_DIAG_INC(DIAG_POLL_GUARD_EXIT);
++		return 0;
++	}
+ #endif /* WITH_USB */
+ 	if (!poll_primed) {
+ 		if (!microlink_prime_poll()) {
++			MLINK_DIAG_INC(DIAG_POLL_PRIME_FAILED);
+ 			return 0;
+ 		}
+ 	}
+ 
+ 	if (microlink_receive_once()) {
++		MLINK_DIAG_INC(DIAG_POLL_OK);
+ 		consecutive_timeouts = 0;
+ 		last_poll_success = now;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		if (continuous_mode) {
++			continuous_diag_last_success_source = "poll";
++			continuous_diag_last_success_assigned = 1;
++		}
++#endif
+ 		last_microlink_data = now;
+ 		poll_primed = 0;
+ 		return 1;
+@@ -3600,6 +3906,7 @@
+ 
+ 	poll_primed = 0;
+ 	consecutive_timeouts++;
++	MLINK_DIAG_INC(DIAG_POLL_FAILED);
+ 	return 0;
+ }
+ 
+@@ -3769,6 +4076,12 @@
+ 				return 0;
+ 			consecutive_timeouts = 0;
+ 			last_poll_success = microlink_now();
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++			if (continuous_mode) {
++				continuous_diag_last_success_source = "handshake";
++				continuous_diag_last_success_assigned = 1;
++			}
++#endif
+ 			session_ready = 1;
+ 			upsdebugx(1, "microlink: STABILITY session_established attempt=%u",
+ 				attempt + 1);
+@@ -4703,6 +5016,26 @@
+ 	continuous_cleanup_done = 0;
+ 	continuous_cleanup_ok = 0;
+ 	continuous_cleanup_clock_ok = 0;
++#if defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1) && !defined(WIN32)
++	memset(continuous_diag_counters, 0, sizeof(continuous_diag_counters));
++	continuous_diag_saturated = 0;
++	continuous_diag_time_saturated = 0;
++	continuous_diag_emitted = 0;
++	continuous_diag_duration_overridden = 0;
++	continuous_diag_cleanup_invoked = 0;
++	continuous_diag_stop_state = "not_reached";
++	continuous_diag_finish_state = "not_called";
++	continuous_diag_terminal_time_defined = 0;
++	continuous_diag_first_site = "not_observed";
++	continuous_diag_last_success_source = "none";
++	continuous_diag_last_success_assigned = 0;
++	continuous_diag_last_age_defined = 0;
++	continuous_diag_cache_time_defined = 0;
++	continuous_diag_previous_dynamic_defined = 0;
++	continuous_diag_publication_dynamic_defined = 0;
++	continuous_diag_publication_dynamic_count = 0U;
++	continuous_diag_blob_rows_defined = 0;
++#endif
+ 	mlink_continuous_fields_clear(continuous_fields);
+ #endif
+ 	session_ready = 0;
+@@ -4837,28 +5170,37 @@
+ 		if (continuous_terminal_latched) return;
+ 		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_4840");
+ 		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			return;
+ 		}
+ 		continuous_last_elapsed_ms = elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		continuous_diag_terminal_time_defined = 1;
++#endif
+ 		if (elapsed_ms >= 120000U) {
++			MLINK_DIAG_SITE("apc_4845");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
+ 			return;
+ 		}
+ 		if (microlink_usb_guard_expired()) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_4850");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			return;
+ 		}
+ 		if (microlink_usb_device_gone()) {
++			MLINK_DIAG_SITE("apc_4854");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
+ 			return;
+ 		}
+ 		if (!session_ready) {
++			MLINK_DIAG_SITE("update_pre_session");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
+ 			return;
+ 		}
+ 		if (microlink_midsession_timed_out(microlink_now())) {
++			MLINK_DIAG_SITE("update_pre_idle");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
+ 			return;
+ 		}
+@@ -4943,29 +5285,38 @@
+ 	if (continuous_mode) {
+ 		uint64_t elapsed_ms;
+ 		if (continuous_guard_error) {
++			MLINK_DIAG_SITE("apc_4946");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			return;
+ 		}
+ 		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_4951");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			return;
+ 		}
+ 		continuous_last_elapsed_ms = elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		continuous_diag_terminal_time_defined = 1;
++#endif
+ 		if (elapsed_ms >= 120000U) {
++			MLINK_DIAG_SITE("apc_4956");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
+ 			return;
+ 		}
+ 		if (microlink_usb_guard_expired()) {
+ 			continuous_guard_error = 1;
++			MLINK_DIAG_SITE("apc_4961");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			return;
+ 		}
+ 		if (microlink_usb_device_gone()) {
++			MLINK_DIAG_SITE("apc_4965");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
+ 			return;
+ 		}
+ 		if (!session_ready) {
++			MLINK_DIAG_SITE("update_post_session");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
+ 			return;
+ 		}
+@@ -4985,6 +5336,7 @@
+ 	if (!good && microlink_midsession_timed_out(now)) {
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		if (continuous_mode) {
++			MLINK_DIAG_SITE("update_post_idle");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
+ 			return;
+ 		}
+@@ -5062,6 +5414,7 @@
+ 	length = strlen(line);
+ 	if (length == 0U || length > MLINK_CONTINUOUS_MAX_LINE
+ 	 || fwrite(line, 1U, length, stdout) != length || fflush(stdout) != 0) {
++		MLINK_DIAG_SITE("apc_5065");
+ 		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_OUTPUT_ERROR);
+ 		return 0;
+ 	}
+@@ -5085,6 +5438,33 @@
+ 		return 0;
+ 	}
+ 	if (!microlink_continuous_write_line(line)) return 0;
++	MLINK_DIAG_INC(DIAG_PUBLICATION_SAMPLES);
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++	{
++		uint32_t minimum = UINT32_MAX, maximum = 0U;
++		unsigned int i, count = 0U;
++		for (i = 0U; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
++			const mlink_continuous_field_t *field = &continuous_fields[i];
++			if (field->kind != MLINK_CONTINUOUS_STATIC
++			 && field->state == MLINK_CONTINUOUS_OBSERVED && field->has_time) {
++				if (field->observed_ms < minimum) minimum = field->observed_ms;
++				if (field->observed_ms > maximum) maximum = field->observed_ms;
++				count++;
++			}
++		}
++		continuous_diag_publication_dynamic_count = count;
++		continuous_diag_publication_dynamic_defined = count > 0U;
++		if (count > 0U) {
++			continuous_diag_publication_dynamic_min = minimum;
++			continuous_diag_publication_dynamic_max = maximum;
++			if (continuous_diag_previous_dynamic_defined
++			 && minimum > continuous_diag_previous_dynamic_min)
++				MLINK_DIAG_INC(DIAG_PUBLICATION_DYNAMIC_ADVANCED);
++			continuous_diag_previous_dynamic_min = minimum;
++		}
++		continuous_diag_previous_dynamic_defined = count > 0U;
++	}
++#endif
+ 	continuous_sequence = sequence;
+ 	continuous_last_slot = slot;
+ 	continuous_have_slot = 1;
+@@ -5126,27 +5506,36 @@
+ 		uint32_t due_slot;
+ 		if (continuous_terminal_latched) break;
+ 		if (microlink_guarded_stop_requested()) {
++			MLINK_DIAG_SITE("apc_5129");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
+ 			break;
+ 		}
+ 		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++			MLINK_DIAG_SITE("apc_5133");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			break;
+ 		}
+ 		continuous_last_elapsed_ms = elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		continuous_diag_terminal_time_defined = 1;
++#endif
+ 		if (elapsed_ms >= 120000U) {
++			MLINK_DIAG_SITE("apc_5138");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
+ 			break;
+ 		}
+ 		if (microlink_usb_guard_expired()) {
++			MLINK_DIAG_SITE("apc_5142");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			break;
+ 		}
+ 		if (microlink_usb_device_gone()) {
++			MLINK_DIAG_SITE("apc_5146");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
+ 			break;
+ 		}
+ 		if (!session_ready || continuous_guard_error) {
++			MLINK_DIAG_SITE(continuous_guard_error ? "stream_guard" : "stream_session");
+ 			microlink_continuous_latch_end(continuous_guard_error
+ 				? MLINK_CONTINUOUS_END_GUARD_ERROR : MLINK_CONTINUOUS_END_SESSION_LOST);
+ 			break;
+@@ -5159,22 +5548,30 @@
+ 				upsdebugx(1, "apcmicrolink: continuous update complete elapsed=%" PRIu64 " guard=%d session=%d",
+ 					elapsed_ms, continuous_guard_error, session_ready);
+ 				if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++					MLINK_DIAG_SITE("apc_5162");
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 					break;
+ 				}
+ 				continuous_last_elapsed_ms = elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++				continuous_diag_terminal_time_defined = 1;
++#endif
+ 				if (elapsed_ms >= 120000U) {
++					MLINK_DIAG_SITE("apc_5167");
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
+ 					break;
+ 				}
+ 				if (continuous_guard_error || !session_ready) break;
+ 				if (microlink_guarded_stop_requested()) {
++					MLINK_DIAG_SITE("apc_5172");
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
+ 					break;
+ 				}
+ 			}
+ 			if (!microlink_continuous_emit_sample(elapsed_ms)) {
+ 				if (continuous_end_reason != MLINK_CONTINUOUS_END_OUTPUT_ERROR)
++					MLINK_DIAG_SITE("apc_5178");
++				if (continuous_end_reason != MLINK_CONTINUOUS_END_OUTPUT_ERROR)
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 				else output_ok = 0;
+ 				break;
+@@ -5182,6 +5579,7 @@
+ 		}
+ 		next_slot_ms = ((uint64_t)continuous_last_slot + 1U) * 5000U;
+ 		if (!microlink_continuous_wait_until(next_slot_ms)) {
++			MLINK_DIAG_SITE("apc_5185");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			break;
+ 		}
+@@ -5194,7 +5592,11 @@
+ 	if (!cleanup_ok && continuous_end_reason == MLINK_CONTINUOUS_END_DURATION_COMPLETE) {
+ 		continuous_end_reason = MLINK_CONTINUOUS_END_GUARD_ERROR;
+ 		continuous_terminal_latched = 1;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++		continuous_diag_duration_overridden = 1;
++#endif
+ 	} else if (!cleanup_ok) {
++		MLINK_DIAG_SITE("apc_5198");
+ 		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 	}
+ 	if (!continuous_cleanup_clock_ok || continuous_last_elapsed_ms >= 130000U) {
+@@ -5209,6 +5611,9 @@
+ 	}
+ 	if (cleanup_ok && output_ok
+ 	 && continuous_end_reason == MLINK_CONTINUOUS_END_DURATION_COMPLETE) result = 0;
++#if defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1) && !defined(WIN32)
++	microlink_diag_emit_summary();
++#endif
+ 	return result;
+ }
+ #endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+@@ -5286,7 +5691,11 @@
+ {
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	int continuous_stop_ok = 1;
++	int continuous_stop_invoked = 0;
+ 	uint64_t cleanup_elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++	if (continuous_mode) continuous_diag_cleanup_invoked = 1;
++#endif
+ 	if (continuous_mode && continuous_cleanup_done) return;
+ #endif
+ 	/* Close the tunnel behind us. Dropping the connection with a NEXT still
+@@ -5306,6 +5715,9 @@
+ 	 * Best-effort: this runs on the way out, so a failed write is worth a
+ 	 * debug line and nothing more. */
+ 	if (microlink_get_object(MLINK_OBJ_PROTOCOL)->seen) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		continuous_stop_invoked = 1;
++#endif
+ 		session_ready = 0;
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		if (continuous_mode) {
+@@ -5320,6 +5732,11 @@
+ #endif
+ 		}
+ 	}
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++	else if (continuous_mode) {
++		continuous_diag_stop_state = "not_required";
++	}
++#endif
+ 
+ #ifdef WITH_USB
+ 	if (is_usb) {
+@@ -5330,9 +5747,19 @@
+ 			continuous_cleanup_clock_ok = microlink_usb_guard_finish_elapsed_ms(&cleanup_elapsed_ms);
+ 			if (continuous_cleanup_clock_ok)
+ 				continuous_last_elapsed_ms = cleanup_elapsed_ms;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++			if (continuous_cleanup_clock_ok) continuous_diag_terminal_time_defined = 1;
++#endif
+ 			continuous_cleanup_ok = continuous_stop_ok && continuous_cleanup_clock_ok
+ 				&& hidapi_finish_status == MLINK_HIDAPI_SESSION_RELEASED;
+ 			continuous_cleanup_done = 1;
++#ifdef MLINK_CONTINUOUS_DIAGNOSTICS_V1
++			if (continuous_stop_invoked)
++				continuous_diag_stop_state = continuous_stop_ok ? "ok" : "failed";
++			continuous_diag_finish_state = hidapi_finish_status == MLINK_HIDAPI_SESSION_RELEASED
++				? "released" : hidapi_finish_status == MLINK_HIDAPI_SESSION_RETAINED
++				? "retained" : "unknown";
++#endif
+ 		}
+ #endif
+ #else

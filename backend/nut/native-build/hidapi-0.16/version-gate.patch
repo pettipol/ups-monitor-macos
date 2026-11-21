@@ -1,0 +1,13 @@
+--- a/drivers/apcmicrolink-hidapi-native.c
++++ b/drivers/apcmicrolink-hidapi-native.c
+@@ -13,8 +13,8 @@
+ #include <time.h>
+ #include <wchar.h>
+ 
+-#if HID_API_VERSION != HID_API_MAKE_VERSION(0, 15, 0)
+-#error "This binding requires the pinned HIDAPI 0.15.0 headers"
++#if HID_API_VERSION != HID_API_MAKE_VERSION(0, 16, 0)
++#error "This binding requires the pinned HIDAPI 0.16.0 headers"
+ #endif
+ 
+ #define NATIVE_MAX_PATH_BYTES 4096U

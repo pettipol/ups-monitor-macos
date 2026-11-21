@@ -151,7 +151,12 @@ def first_region(source: str, begin: str, end: str) -> str:
     return source[left:right]
 
 
-def generate(usb: str, backend: str) -> tuple[str, list[str]]:
+def generate(
+    usb: str,
+    backend: str,
+    *,
+    extra_usb_functions: tuple[str, ...] = (),
+) -> tuple[str, list[str]]:
     macro = "#define MLINK_USB_ASYNC_QUEUE_LEN"
     report_definitions = between(
         usb, "#define MLINK_USB_REPORT_PAYLOAD_LEN", "#define MLINK_USB_WRITE_TIMEOUT_MS"
@@ -178,7 +183,7 @@ def generate(usb: str, backend: str) -> tuple[str, list[str]]:
     scoped_getter = {"int microlink_usb_get_char(unsigned char *ch, long d_usec)"}
     usb_bodies = []
     pending_sig = "static int microlink_usb_async_pending(void)"
-    for sig in USB_FUNCTIONS:
+    for sig in (*USB_FUNCTIONS, *extra_usb_functions):
         region = async_region if sig in scoped_async else getter_region if sig in scoped_getter else usb
         body = exact_function(region, sig)
         if sig == pending_sig:
@@ -250,6 +255,11 @@ def generate(usb: str, backend: str) -> tuple[str, list[str]]:
         "typedef int nut_bool_t;\n"
         + report_definitions + backend_state + declarations + state + "\n"
         + "int microlink_usb_guard_expired(void);\n"
+        + (
+            "static int microlink_usb_guarded_stop_requested(void);\n"
+            "int nut_guarded_dump_signal_requested(void);\n"
+            if extra_usb_functions else ""
+        )
         + "static void microlink_usb_try_decode_fallback(const unsigned char *, size_t);\n"
         + "static void microlink_usb_handle_busy(const char *);\n"
         + "static void microlink_usb_device_gone_set(int);\n"
@@ -268,7 +278,7 @@ def generate(usb: str, backend: str) -> tuple[str, list[str]]:
         + "\n".join(usb_bodies) + "\n"
         + "\n".join(backend_bodies) + "\n"
     )
-    names = list(USB_FUNCTIONS) + list(BACKEND_FUNCTIONS)
+    names = list(USB_FUNCTIONS) + list(extra_usb_functions) + list(BACKEND_FUNCTIONS)
     return generated, names
 
 

@@ -142,6 +142,57 @@ private func fixtureDirectory() -> URL {
     #expect(try await writer.read(now: widgetNow) == nil)
 }
 
+@Test func readIfPresentTreatsOnlyMissingLeafAsAwaitingFirstCapture() async throws {
+    let parent = fixtureDirectory()
+    let directory = parent.appendingPathComponent("store", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: parent) }
+
+    #expect(try WidgetSnapshotStore.readIfPresent(directoryURL: directory, now: widgetNow) == nil)
+    var missingInfo = stat()
+    let missingStatResult = lstat(directory.path, &missingInfo)
+    #expect(missingStatResult != 0 && errno == ENOENT)
+    #expect(throws: WidgetStoreError.invalidRequest) {
+        try WidgetSnapshotStore.readIfPresent(directoryURL: directory,
+                                              now: Date(timeIntervalSince1970: .infinity))
+    }
+    #expect(throws: WidgetStoreError.unsafeLocation) {
+        try WidgetSnapshotStore(directoryURL: directory, mode: .readOnly)
+    }
+
+    let writer = try WidgetSnapshotStore(directoryURL: directory, mode: .readWrite)
+    let payload = widgetPayload()
+    try await writer.write(payload, now: widgetNow)
+    #expect(try WidgetSnapshotStore.readIfPresent(directoryURL: directory, now: widgetNow) == payload)
+}
+
+@Test func readIfPresentDoesNotHideUntrustedParentOrDanglingLeafSymlink() throws {
+    let base = fixtureDirectory()
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: base) }
+
+    let untrustedParent = base.appendingPathComponent("writable-parent", isDirectory: true)
+    try FileManager.default.createDirectory(at: untrustedParent, withIntermediateDirectories: false,
+                                            attributes: [.posixPermissions: 0o700])
+    #expect(chmod(untrustedParent.path, mode_t(0o720)) == 0)
+    #expect(throws: WidgetStoreError.unsafeLocation) {
+        try WidgetSnapshotStore.readIfPresent(
+            directoryURL: untrustedParent.appendingPathComponent("store", isDirectory: true), now: widgetNow)
+    }
+
+    let danglingLeaf = base.appendingPathComponent("dangling", isDirectory: true)
+    let absentTarget = base.appendingPathComponent("no-such-target", isDirectory: true)
+    #expect(symlink(absentTarget.path, danglingLeaf.path) == 0)
+    #expect(throws: WidgetStoreError.unsafeLocation) {
+        try WidgetSnapshotStore.readIfPresent(directoryURL: danglingLeaf, now: widgetNow)
+    }
+    var leafInfo = stat()
+    #expect(lstat(danglingLeaf.path, &leafInfo) == 0)
+    #expect((leafInfo.st_mode & S_IFMT) == S_IFLNK)
+}
+
 @Test func directoryPrivacyIsRecheckedWithoutRepairingPermissions() async throws {
     let directory = fixtureDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

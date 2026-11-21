@@ -16,6 +16,7 @@ public enum UPSCTextDecodeError: Error, Equatable, Sendable {
     case invalidJSON
     case emptyJSON
     case nonStringJSONValue
+    case invalidDriverDump
 }
 
 /// Decodes only the documented `upsc <ups>` text listing. This is not a NUT wire-protocol parser.
@@ -34,6 +35,14 @@ public struct UPSCTextDecoder: Sendable {
     }
 
     public func decode(_ text: String, sourceID: String, capturedAt: Date) throws -> NUTSnapshot {
+        try decode(text, sourceID: sourceID, capturedAt: capturedAt, context: .upsc)
+    }
+
+    func decodeDriverDumpListing(_ text: String, sourceID: String, capturedAt: Date) throws -> NUTSnapshot {
+        try decode(text, sourceID: sourceID, capturedAt: capturedAt, context: .microlinkDriverDump)
+    }
+
+    private func decode(_ text: String, sourceID: String, capturedAt: Date, context: DecodeContext) throws -> NUTSnapshot {
         guard isValidSourceID(sourceID) else { throw UPSCTextDecodeError.invalidSourceID }
         guard capturedAt.timeIntervalSince1970.isFinite else { throw UPSCTextDecodeError.invalidCaptureTime }
         guard text.utf8.count <= Self.maximumInputBytes else { throw UPSCTextDecodeError.inputTooLarge }
@@ -54,11 +63,18 @@ public struct UPSCTextDecoder: Sendable {
             if line.isEmpty { continue }
 
             guard let colon = line.firstIndex(of: ":") else {
+                if context == .microlinkDriverDump { throw UPSCTextDecodeError.invalidDriverDump }
                 throw UPSCTextDecodeError.malformedLine(line: offset + 1)
             }
             let key = String(line[..<colon])
             let rawValue = String(line[line.index(after: colon)...])
-            guard isValidVariableName(key) else { throw UPSCTextDecodeError.malformedLine(line: offset + 1) }
+            guard isValidVariableName(key) else {
+                if context == .microlinkDriverDump { throw UPSCTextDecodeError.invalidDriverDump }
+                throw UPSCTextDecodeError.malformedLine(line: offset + 1)
+            }
+            if context == .microlinkDriverDump && !key.contains(".") {
+                throw UPSCTextDecodeError.invalidDriverDump
+            }
 
             guard let metricID = NUTMetricID.allCases.first(where: { $0.nutVariable == key }) else {
                 if key == "ups.status" {
@@ -67,14 +83,22 @@ public struct UPSCTextDecoder: Sendable {
                     guard value.utf8.count <= Self.maximumValueBytes, hasNoControlCharacters(value) else {
                         throw UPSCTextDecodeError.lineTooLong
                     }
-                    knownValues[key] = value
+                    if context == .microlinkDriverDump && value.isEmpty {
+                        knownValues.removeValue(forKey: key)
+                    } else {
+                        knownValues[key] = value
+                    }
                     statusSeen = true
                 } else if key == "driver.name" {
                     guard !driverSeen else { throw UPSCTextDecodeError.duplicateDriverName }
                     driverSeen = true
                     let value = trimHorizontalWhitespace(rawValue)
                     guard value.utf8.count <= Self.maximumValueBytes else { throw UPSCTextDecodeError.lineTooLong }
-                    if value == "apcmicrolink" { knownValues[key] = value }
+                    if context == .upsc {
+                        if value == "apcmicrolink" { knownValues[key] = value }
+                    } else {
+                        knownValues[key] = value
+                    }
                 }
                 continue
             }
@@ -87,15 +111,25 @@ public struct UPSCTextDecoder: Sendable {
             knownValues[key] = value
         }
 
-        return try makeSnapshot(values: knownValues, sourceID: sourceID, capturedAt: capturedAt)
+        if context == .microlinkDriverDump {
+            guard let driverName = knownValues["driver.name"],
+                  driverName == "apcmicrolink-hidapi-observe" || driverName == "full-nut-hidapi-fake" else {
+                throw UPSCTextDecodeError.invalidDriverDump
+            }
+        }
+        return try makeSnapshot(values: knownValues, sourceID: sourceID, capturedAt: capturedAt,
+                                provider: context == .microlinkDriverDump ? .driverDumpOutput : .upscOutput,
+                                driverProfile: context == .microlinkDriverDump ? .apcMicrolink : nil)
     }
 
-    fileprivate func makeSnapshot(values: [String: String], sourceID: String, capturedAt: Date) throws -> NUTSnapshot {
+    fileprivate func makeSnapshot(values: [String: String], sourceID: String, capturedAt: Date,
+                                  provider: NUTSnapshotProvider = .upscOutput,
+                                  driverProfile forcedDriverProfile: DriverProfile? = nil) throws -> NUTSnapshot {
         guard isValidSourceID(sourceID) else { throw UPSCTextDecodeError.invalidSourceID }
         guard capturedAt.timeIntervalSince1970.isFinite else { throw UPSCTextDecodeError.invalidCaptureTime }
 
         let status = try decodeStatus(values["ups.status"])
-        let driverProfile: DriverProfile = values["driver.name"] == "apcmicrolink" ? .apcMicrolink : .other
+        let driverProfile: DriverProfile = forcedDriverProfile ?? (values["driver.name"] == "apcmicrolink" ? .apcMicrolink : .other)
         var metrics = [NUTMetricID: NUTMetric]()
         for identifier in NUTMetricID.allCases {
             let provenance: NUTMetricProvenance
@@ -125,7 +159,7 @@ public struct UPSCTextDecoder: Sendable {
             throw UPSCTextDecodeError.noUsableTelemetry
         }
 
-        return NUTSnapshot(sourceID: sourceID, capturedAt: capturedAt, status: status, metrics: metrics)
+        return NUTSnapshot(sourceID: sourceID, capturedAt: capturedAt, status: status, metrics: metrics, provider: provider)
     }
 
     private func decodeStatus(_ value: String?) throws -> NUTStatus {
@@ -264,7 +298,12 @@ public struct UPSCJSONDecoder: Sendable {
     }
 }
 
-private enum DriverProfile {
+fileprivate enum DriverProfile {
     case other
     case apcMicrolink
+}
+
+private enum DecodeContext: Equatable {
+    case upsc
+    case microlinkDriverDump
 }

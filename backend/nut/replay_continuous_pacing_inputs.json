@@ -1,0 +1,177 @@
+{
+  "schema": 1,
+  "status": "PUBLIC_OFFLINE_REPLAY_CANDIDATE_NOT_EXECUTED",
+  "canonical_runner_sha256": "101f5b5c9ec95d7feb18c53e531e4554589a3f0477884c55cc062a889f9c5006",
+  "canonical_manifest_sha256": "9020f7675b89f996d6c78dfd48ca63cc61a1f27349f97254dffd9cb6f21f189e",
+  "adapter_sha256": "aafb0c9af28d96cec6cc9a71378cf759cc77838b4b8eb646e348e7b9f6b0d17a",
+  "source_before_sha256": "3cfea88fa1424087fb14d6c857a9cd041a636d70e75321034ecda584f779c2bc",
+  "source_after_sha256": "4193f05e286d6fb071ae0aed8aa3363175b55d1a47b265cf08550f917269d015",
+  "new_pins": {
+    "nut-hidapi-continuous-pacing-v2-73c4502.patch": "9f1a364317e1e4794da15620d23986ee52cf4a4d3345634d02eebf23de625c22",
+    "replay_continuous_pacing.c": "2c5ca61e5f675e4e13bd1f1eb3f775d3a1c725efc3f6721bf6cd40374a769653",
+    "test_continuous_pacing.py": "52f2cce96227dca47a621e42f27414324c974ffee68573bceb652b4468eed79b"
+  },
+  "archive": {
+    "sha256": "e3ea175565c461a9e741df77dd91103d695b9c60f8d423d9b6ce6c778f98615f",
+    "revision": "73c4502191d025e35122463986a80c676e734b04",
+    "origin": "Uncompressed git archive tar from Network UPS Tools commit 73c4502191d025e35122463986a80c676e734b04",
+    "identity": "The exact SHA-256 is required. A GitHub-generated source tarball or a repacked archive is not interchangeable."
+  },
+  "python": {
+    "version": "3.15.2",
+    "required_flags": [
+      "-I",
+      "-S",
+      "-B"
+    ],
+    "optimization": 0,
+    "executable_policy": "No compiled-local executable SHA-256 admission gate. Record the actual resolved interpreter executable SHA-256 in output manifest.json; this is identity evidence, not authenticity verification."
+  },
+  "reuse": {
+    "backend_dir": "Caller-supplied absolute --backend-dir (for example, the resolved repo/backend/nut directory)",
+    "runner_functions": [
+      "safe_path",
+      "verify",
+      "load_pinned",
+      "read_contract",
+      "output_location",
+      "tree_bytes",
+      "command",
+      "discover_toolchain",
+      "patch_targets",
+      "reconstruct",
+      "verify_selected_objects",
+      "audit"
+    ],
+    "derived_function": "build_pair: replace only diagnostic host with new host; diagnostics=1 in both builds; pacing=0/1",
+    "supervisor": {
+      "name": "process_deadline.py",
+      "sha256": "e53afffbb3a3525e90a6ca3576a335ea6d797a62b22754218fbde569e138cb7a"
+    },
+    "dependency_checks": {
+      "name": "replay_hidapi_full_driver.py",
+      "sha256": "fb24ebb0e5b9c8a1bb30b8237d2eda60d0da2e9f5091ff882af5599c1145445c"
+    },
+    "wire_parser": {
+      "name": "continuous_protocol.py",
+      "sha256": "939d3d351cd0bc36c4ad3101d45f34dda18a5adc3e210666cb306c6e73ceb377",
+      "assignment": "Mandatory validator.protocol before validate_pair"
+    },
+    "all_other_local_inputs": "Exact pins in canonical manifest, verified before and after build/execution; canonical manifest is not modified",
+    "toolchain": {
+      "xcode_version": "27.1",
+      "macos_sdk_version": "27.0",
+      "selection": "Canonical discover_toolchain; discovered compiler/xcodebuild/SDKSettings hashes recorded and rechecked"
+    }
+  },
+  "definitions": {
+    "both": [
+      "MLINK_HIDAPI_NATIVE_CANDIDATE=1",
+      "MLINK_HIDAPI_CONTINUOUS_CANDIDATE=1",
+      "MLINK_HIDAPI_CONTINUOUS_REPLAY=1",
+      "MLINK_CONTINUOUS_DIAGNOSTICS_V1=1"
+    ],
+    "off": [
+      "MLINK_CONTINUOUS_PACING_V2=0"
+    ],
+    "on": [
+      "MLINK_CONTINUOUS_PACING_V2=1"
+    ]
+  },
+  "scenario": "next-gap-budget",
+  "fixture_scope": "One synthetic scenario; dynamic page 1 validated field by field; page 2 remains unrelated. Summary timing counters are not a lossless trace.",
+  "fake_argv_tail": [
+    "-s",
+    "replay",
+    "-d1",
+    "-x",
+    "port=auto",
+    "-x",
+    "hidapi_shared",
+    "-x",
+    "guarded_monitor",
+    "-x",
+    "guard_vid=0001",
+    "-x",
+    "guard_pid=0002",
+    "-x",
+    "guard_deadline=130",
+    "-x",
+    "guard_probe_attempts=1",
+    "-x",
+    "hid_fallback=no",
+    "-x",
+    "monitor_stream_v1"
+  ],
+  "limits": {
+    "tree_bytes": 1073741824,
+    "pair_seconds": 60,
+    "fake_processes": 2,
+    "child_seconds": 20,
+    "termination_grace_seconds": 2,
+    "kill_reap_seconds": 1,
+    "child_capture_bytes": 1048576,
+    "aggregate_capture_bytes": 2097152
+  },
+  "output_identity": {
+    "root": "Caller-selected new private directory strictly under system TMPDIR or /private/tmp; no input overlap",
+    "binaries": [
+      "continuous-pacing-fake-off",
+      "continuous-pacing-fake-on"
+    ],
+    "default_binary_mode": "0600",
+    "fake_captures": [
+      "pacing-pair/0/stdout.bin",
+      "pacing-pair/0/stderr.bin",
+      "pacing-pair/1/stdout.bin",
+      "pacing-pair/1/stderr.bin"
+    ],
+    "receipts": [
+      "manifest.json",
+      "pacing-pair/run-receipt.json",
+      "one bounded command JSON and capture directory per tool invocation"
+    ],
+    "command_record": "Every actual tool/fake argv, executable hash and supervisor outcome is recorded. No arbitrary command argument is accepted."
+  },
+  "commands": {
+    "default": "Python 3.15.2 -I -S -B replay_continuous_pacing.py --backend-dir BACKEND --nut-archive ARCHIVE --new-files-dir NEW_FILES --output-dir NEW_TMP_OUTPUT --compile-only",
+    "explicit_fake": "Same fixed launch with --run-fake replacing --compile-only; executes only the two admitted fake binaries",
+    "fake": "/usr/bin/env MLINK_CONTINUOUS_REPLAY_SCENARIO=next-gap-budget NEW_TMP_OUTPUT/continuous-pacing-fake-{off,on} followed by fake_argv_tail",
+    "source_patch": "/usr/bin/patch --batch --fuzz=0 -p1 --no-backup-if-mismatch -d NEW_TMP_OUTPUT/source -i NEW_FILES/nut-hidapi-continuous-pacing-v2-73c4502.patch",
+    "build": "Exact derived build_pair commands are in the reviewed adapter; command receipts expand all paths and the discovered pinned toolchain",
+    "compile_argv_template": [
+      "python3.15",
+      "-I",
+      "-S",
+      "-B",
+      "repo/backend/nut/replay_continuous_pacing.py",
+      "--backend-dir",
+      "ABSOLUTE_BACKEND_DIR",
+      "--nut-archive",
+      "ABSOLUTE_ARCHIVE_PATH",
+      "--new-files-dir",
+      "ABSOLUTE_NEW_FILES_DIR",
+      "--output-dir",
+      "NEW_SYSTEM_TMP_DIRECTORY",
+      "--compile-only"
+    ]
+  },
+  "qualification": {
+    "hardware": "NOT_RUN_BY_THIS_RUNNER",
+    "app_gui": "NOT_QUALIFIED",
+    "widget": "NOT_QUALIFIED",
+    "daily_use": "NOT_QUALIFIED",
+    "public_adapter_build": "NOT_RUN",
+    "public_adapter_fake_execution": "NOT_RUN",
+    "source_fidelity": "Full source-tree before/after hashes; only drivers/apcmicrolink.c may change",
+    "hardware_authorization": "No hardware launch or authorization is provided by this manifest or replay API."
+  },
+  "revision_note": "REV2 changes only the fake cycle to alternate measurement page1 and unrelated final page2, as the admitted same-payload fixture; scheduler and assertions unchanged. REV1 captures retained.",
+  "adapter_name": "replay_continuous_pacing.py",
+  "derivation": {
+    "script_sha256": "1f0b837670d13fdba1c3784059fc1d0171434b35e24be42c92d5104766f2343a",
+    "input_manifest_sha256": "e9028688aedf582c2aa69cd48b3d8d9d8830b703af1d15cab1f291186bf76204",
+    "revision": "Reviewed offline REV2",
+    "changes": "Public script/manifest names; remove machine-specific Python executable admission hash; retain exact version and flags, record actual interpreter hash; remove private example paths."
+  }
+}

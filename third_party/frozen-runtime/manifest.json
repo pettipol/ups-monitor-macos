@@ -1,0 +1,214 @@
+{
+  "components": {
+    "cpython-pbs": {
+      "archive_sha256": "17a41099bba8c18c45c527580014e75dc7a77300f619d7f5cdfecc57aca06f39",
+      "metadata_sha256": "6256d1667b03c2f582c7ba0b4c058f59acd02c8b1819ceca3ce904349e13e1bc",
+      "python_version": "3.15.2",
+      "release": "20261026",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.15.2+20261026-aarch64-apple-darwin-pgo+lto-full.tar.zst"
+    },
+    "pyinstaller": {
+      "license_source_url": "https://github.com/pyinstaller/pyinstaller/blob/v6.22.3/COPYING.txt",
+      "version": "6.22.3",
+      "wheel_sha256": "052f4a1cd4f81092ccb7a18fe8ebc9ecf832a5917317e39fb3775af4e959b253",
+      "wheel_url": "https://files.pythonhosted.org/packages/ec/af/898f70947e27f8e65d55183c780e77112e023c0b4a6fba6255d4d563a27d/pyinstaller-6.22.3-py3-none-macosx_10_13_universal2.whl"
+    },
+    "pyinstaller-hooks-contrib": {
+      "license_source_url": "https://github.com/pyinstaller/pyinstaller-hooks-contrib/blob/v2026.9/LICENSE",
+      "version": "2026.9",
+      "wheel_sha256": "fb3e67dd64122561724c48ad0366ac9e8c16e638b63bf7d85de03bf3fdbf06c3",
+      "wheel_url": "https://files.pythonhosted.org/packages/93/fe/ded0e20de0580257d97dbabb4db7ab4d96ad8ade7d41149e66308057cf52/pyinstaller_hooks_contrib-2026.9-py3-none-any.whl"
+    },
+    "ups-monitor": {
+      "license": "MIT",
+      "scope": "Original project code only"
+    }
+  },
+  "files": {
+    "README.md": {
+      "bytes": 4413,
+      "component": "ups-monitor",
+      "scope": "original-scope-documentation",
+      "sha256": "e70fb1f6e71142ec89c9d47efccc8df5edc985204d9d7006e62ef5c4efdcaf35",
+      "source_member": "third_party/frozen-runtime/README.md"
+    },
+    "pyinstaller-COPYING.txt": {
+      "bytes": 32604,
+      "component": "pyinstaller",
+      "scope": "embedded-project-or-helper",
+      "sha256": "0598064c7d2718e38d7914a7d08343b2fa008e3bea9ebba2aa7a6ffa5900dd64",
+      "source_member": "pyinstaller-6.22.3.dist-info/licenses/COPYING.txt"
+    },
+    "pyinstaller-hooks-contrib-LICENSE.txt": {
+      "bytes": 27666,
+      "component": "pyinstaller-hooks-contrib",
+      "scope": "build-only-observed",
+      "sha256": "91d0baaff00773038e72c0a1fc9d5d2d38706b7a2b9c04f34296608f931b9cd0",
+      "source_member": "pyinstaller_hooks_contrib-2026.9.dist-info/licenses/LICENSE"
+    },
+    "python-LICENSE.bdb.txt": {
+      "bytes": 7293,
+      "component": "cpython-pbs",
+      "scope": "retained-unmapped",
+      "sha256": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b",
+      "source_member": "licenses/LICENSE.bdb.txt"
+    },
+    "python-LICENSE.bzip2.txt": {
+      "bytes": 1743,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "source_member": "licenses/LICENSE.bzip2.txt"
+    },
+    "python-LICENSE.cpython.txt": {
+      "bytes": 36164,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd",
+      "source_member": "licenses/LICENSE.cpython.txt"
+    },
+    "python-LICENSE.expat.txt": {
+      "bytes": 1144,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "source_member": "licenses/LICENSE.expat.txt"
+    },
+    "python-LICENSE.libX11.txt": {
+      "bytes": 47018,
+      "component": "cpython-pbs",
+      "scope": "retained-unmapped",
+      "sha256": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e",
+      "source_member": "licenses/LICENSE.libX11.txt"
+    },
+    "python-LICENSE.libXau.txt": {
+      "bytes": 1148,
+      "component": "cpython-pbs",
+      "scope": "retained-unmapped",
+      "sha256": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa",
+      "source_member": "licenses/LICENSE.libXau.txt"
+    },
+    "python-LICENSE.libedit.txt": {
+      "bytes": 1614,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "source_member": "licenses/LICENSE.libedit.txt"
+    },
+    "python-LICENSE.libffi.txt": {
+      "bytes": 1132,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "source_member": "licenses/LICENSE.libffi.txt"
+    },
+    "python-LICENSE.liblzma.txt": {
+      "bytes": 660,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "source_member": "licenses/LICENSE.liblzma.txt"
+    },
+    "python-LICENSE.libuuid.txt": {
+      "bytes": 1432,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "source_member": "licenses/LICENSE.libuuid.txt"
+    },
+    "python-LICENSE.libxcb.txt": {
+      "bytes": 1337,
+      "component": "cpython-pbs",
+      "scope": "retained-unmapped",
+      "sha256": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd",
+      "source_member": "licenses/LICENSE.libxcb.txt"
+    },
+    "python-LICENSE.mpdecimal.txt": {
+      "bytes": 1284,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "source_member": "licenses/LICENSE.mpdecimal.txt"
+    },
+    "python-LICENSE.ncurses.txt": {
+      "bytes": 1447,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "source_member": "licenses/LICENSE.ncurses.txt"
+    },
+    "python-LICENSE.openssl-3.txt": {
+      "bytes": 10175,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "source_member": "licenses/LICENSE.openssl-3.txt"
+    },
+    "python-LICENSE.sqlite.txt": {
+      "bytes": 1481,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "source_member": "licenses/LICENSE.sqlite.txt"
+    },
+    "python-LICENSE.tcl.txt": {
+      "bytes": 2255,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "source_member": "licenses/LICENSE.tcl.txt"
+    },
+    "python-LICENSE.tix.txt": {
+      "bytes": 2826,
+      "component": "cpython-pbs",
+      "scope": "retained-unmapped",
+      "sha256": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5",
+      "source_member": "licenses/LICENSE.tix.txt"
+    },
+    "python-LICENSE.zlib-ng.txt": {
+      "bytes": 867,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee",
+      "source_member": "licenses/LICENSE.zlib-ng.txt"
+    },
+    "python-LICENSE.zlib.txt": {
+      "bytes": 995,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c",
+      "source_member": "licenses/LICENSE.zlib.txt"
+    },
+    "python-LICENSE.zstd.txt": {
+      "bytes": 1549,
+      "component": "cpython-pbs",
+      "scope": "retained-from-distribution-metadata",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "source_member": "licenses/LICENSE.zstd.txt"
+    },
+    "ups-monitor-LICENSE.txt": {
+      "bytes": 1085,
+      "component": "ups-monitor",
+      "scope": "embedded-project-or-helper",
+      "sha256": "4df5db3b8666af8bffdc5534229f1343c1d014bf15062b7e25d70335348c47d6",
+      "source_member": "LICENSE"
+    }
+  },
+  "observed_helper": {
+    "analysis_toc_sha256": "58584ab9aec400df0cff6e27034c5a5b9465f95157be44b94a0f2265fcf4f97c",
+    "note": "Historical build identity; not a universal detection or redistribution approval.",
+    "pyz_modules": 157,
+    "pyz_toc_sha256": "248e4d7112888bb8026d8a9ddf200b20dc157c81d319675fe18165412ec9bbec",
+    "runtime_hooks": {
+      "pyi_rth_inspect": "observed-in-helper-output"
+    },
+    "sha256": "96c564fc6ba1e21a0da6dcc0182fcd4cd54a51dd3d328cd69aadfab96967a020"
+  },
+  "profile": "ups-monitor-frozen-notices-v1",
+  "redistribution_review": "NOT_PERFORMED",
+  "runtime_upstream": {
+    "archive_sha256": "17a41099bba8c18c45c527580014e75dc7a77300f619d7f5cdfecc57aca06f39",
+    "metadata_sha256": "6256d1667b03c2f582c7ba0b4c058f59acd02c8b1819ceca3ce904349e13e1bc"
+  },
+  "schema_version": 1
+}

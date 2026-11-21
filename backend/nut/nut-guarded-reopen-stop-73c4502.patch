@@ -1,0 +1,90 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* NUT base 73c4502191d025e35122463986a80c676e734b04 plus patches 1-7. */
+/* USB input d6f61c595fd87e3f7d4e416ba8f8d6e04293ea3ff12c93dce60ad0384b4d056d. */
+/* USB output 6023981a06e8b1a3f2eb6db13c91b712060275d4566f398fcd7cb05cd3fe4f99. */
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -119,6 +119,15 @@
+ static int usb_device_gone = 0;
+ static int guarded_monitor = 0;
+ 
++static int microlink_usb_guarded_stop_requested(void)
++{
++#ifndef WIN32
++	return guarded_monitor && nut_guarded_dump_signal_requested();
++#else
++	return 0;
++#endif /* !WIN32 */
++}
++
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ /* Always-outstanding async interrupt-IN listener, serviced by a dedicated pump
+  * thread: one libusb_transfer is kept permanently submitted, and its callback
+@@ -804,6 +813,9 @@
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	int async_ret;
+ #endif
++	if (microlink_usb_guarded_stop_requested()) {
++		return 0;
++	}
+ 	if (guarded_monitor && microlink_usb_guard_expired()) {
+ 		return 0;
+ 	}
+@@ -845,12 +857,19 @@
+ 	if (guarded_monitor && microlink_usb_guard_expired()) {
+ 		return 0;
+ 	}
++	if (microlink_usb_guarded_stop_requested()) {
++		return 0;
++	}
+ 	ret = comm_driver->open_dev(&udev, &curDevice, regex_matcher,
+ 		microlink_usb_report_callback);
+ 	if (ret < 1) {
+ 		udev = NULL;
+ 		return 0;
+ 	}
++	if (microlink_usb_guarded_stop_requested()) {
++		microlink_usb_close();
++		return 0;
++	}
+ 	microlink_usb_device_gone_set(0);
+ 
+ 	upsdebugx(1, "microlink_usb: %s and reopened %s/%s (USB %04x:%04x)",
+@@ -861,6 +880,10 @@
+ 
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	async_ret = microlink_usb_async_start();
++	if (microlink_usb_guarded_stop_requested()) {
++		microlink_usb_close();
++		return 0;
++	}
+ 	if (async_ret <= 0) {
+ 		if (async_ret < 0) {
+ 			return 0;
+@@ -1367,10 +1390,15 @@
+ 	}
+ 	pthread_mutex_lock(&async_lock);
+ 	if (async_owner) {
+-		int running = !async_owner->stop_requested && async_xfer_active;
++		int running = !microlink_usb_guarded_stop_requested()
++			&& !async_owner->stop_requested && async_xfer_active;
+ 		pthread_mutex_unlock(&async_lock);
+ 		return running ? 1 : -1;
+ 	}
++	if (microlink_usb_guarded_stop_requested()) {
++		pthread_mutex_unlock(&async_lock);
++		return 0;
++	}
+ 	if (!microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
+ 		pthread_mutex_unlock(&async_lock);
+ 		return 0;
+@@ -1403,7 +1431,8 @@
+ 		microlink_usb_async_cb, owner, timeout_ms);
+ 
+ 	pthread_mutex_lock(&async_lock);
+-	if (async_owner || !microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
++	if (async_owner || microlink_usb_guarded_stop_requested()
++	 || !microlink_usb_guard_timeout_ms_locked(&timeout_ms)) {
+ 		pthread_mutex_unlock(&async_lock);
+ 		free(owner->buffer);
+ 		libusb_free_transfer(owner->transfer);

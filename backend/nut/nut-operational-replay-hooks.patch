@@ -1,0 +1,72 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -35,6 +35,9 @@
+ #include "apcmicrolink-continuous.h"
+ #ifdef MLINK_HIDAPI_OPERATIONAL_V2
+ #include "apcmicrolink-operational-freshness.h"
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++#include "replay_operational_hooks.h"
++#endif
+ #endif
+ #endif
+ 
+@@ -4974,6 +4977,9 @@
+ 		fatalx(EXIT_FAILURE, "apcmicrolink monitor_stream_v1 could not set its 120-second acquisition cutoff");
+ 	}
+ #endif
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	if (operational_mode) mlink_operational_replay_checkpoint(MLINK_REPLAY_PRE_OPEN);
++#endif
+ 	if (microlink_usb_open() != 1) {
+ #ifdef MLINK_HIDAPI_OPERATIONAL_V2
+ 		if (operational_mode) {
+@@ -5782,6 +5788,9 @@
+ 	if (eligible==MLINK_FRESHNESS_ERROR) goto failure;
+ 	if (eligible==MLINK_FRESHNESS_INELIGIBLE
+ 	 || (operational_have_slot && slot<=operational_last_slot)) return 1;
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	mlink_operational_replay_checkpoint(MLINK_REPLAY_PRE_OUTPUT);
++#endif
+ 	if (!microlink_operational_live(&elapsed_ms)) return 0;
+ 	/* Eligibility is time-sensitive even if no field changed. Use this new
+ 	 * live observation immediately before output, not the earlier snapshot. */
+@@ -5810,6 +5819,9 @@
+ 	eligible=mlink_operational_freshness_prepare(&operational_freshness,
+ 		continuous_fields,elapsed_ms,&candidate);
+ 	if (eligible!=MLINK_FRESHNESS_ELIGIBLE) goto failure;
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	mlink_operational_replay_checkpoint(MLINK_REPLAY_BEFORE_PUBLISHED);
++#endif
+ 	if (!mlink_shared_operational_published(candidate.proposed_minimum_ms)) {
+ 		microlink_continuous_latch_end(mlink_shared_operational_snapshot().reason==MLINK_HEALTH_STOP
+ 			? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
+@@ -5862,6 +5874,9 @@
+ 	uint64_t elapsed_ms=0, iteration_start;
+ 	int output_ok=1;
+ 	if (!operational_mode) return 1;
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	mlink_operational_replay_checkpoint(MLINK_REPLAY_STREAM_ENTER);
++#endif
+ 	for (;;) {
+ 		if (!microlink_operational_live(&elapsed_ms)) break;
+ 		iteration_start=elapsed_ms;
+@@ -5871,6 +5886,9 @@
+ 		}
+ 		upsdrv_updateinfo();
+ 		if (!microlink_operational_live(&elapsed_ms)) break;
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++		mlink_operational_replay_checkpoint(MLINK_REPLAY_BEFORE_WAIT);
++#endif
+ 		/* Keep continuous NEXT turns, not five-second slot sleeps. A bounded
+ 		 * 10 ms floor only prevents a zero-duration host from busy-spinning. */
+ 		if (iteration_start > MLINK_OPERATIONAL_MAX_SAFE_INTEGER-10U) {
+@@ -5888,6 +5906,9 @@
+ 	 && mlink_operational_end_line(line,sizeof(line),continuous_last_elapsed_ms,
+ 		operational_end_reason)) output_ok=microlink_continuous_write_line(line);
+ 	else output_ok=0;
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	mlink_operational_replay_checkpoint(MLINK_REPLAY_FINISHED);
++#endif
+ 	return operational_cleanup_ok && output_ok
+ 		&& operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED ? 0 : 1;
+ }

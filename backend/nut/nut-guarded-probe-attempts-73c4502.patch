@@ -1,0 +1,268 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* NUT base 73c4502191d025e35122463986a80c676e734b04 plus patches 1-8; incremental patch 9. */
+/* Main input b40ccaef148aa0396d8a81bc83e961c4af8d286bccb5e26e745f0252b6709dba; output 8cc88c24c6b719b65dc00d74082217d07de3313d813ac382b844a1d847a346e2. */
+/* APC input efdad6737c377931e5130f00d9e1257091584670d149d49015d06e2854fa14a5; output a181e17e882ddac83e06b86c92866593f4872e2eacb2e12ab6943d8a8df97324. */
+/* USB input 6023981a06e8b1a3f2eb6db13c91b712060275d4566f398fcd7cb05cd3fe4f99; output cc315c05ed27c7e4ec6705e113a7091170a0f08b54aa9823ba0b69dd85af2f36. */
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -257,6 +257,8 @@
+ static int session_ready = 0;
+ static int guarded_monitor = 0;
+ #ifdef WITH_USB
++static unsigned int guard_probe_attempt_limit = 0;
++static unsigned int guard_probe_attempts_used = 0;
+ static int is_usb = 0;
+ static long guarded_deadline_seconds = 0;
+ #endif /* WITH_USB */
+@@ -434,9 +436,28 @@
+ 		*value = 0;
+ 		return 1;
+ 	}
++
++	return 0;
++}
+ 
++#ifdef WITH_USB
++static int microlink_parse_guard_probe_attempts(const char *text,
++	unsigned int *attempts)
++{
++	if (text == NULL || attempts == NULL || text[0] < '1' || text[0] > '9') {
++		return 0;
++	}
++	if (text[1] == '\0') {
++		*attempts = (unsigned int)(text[0] - '0');
++		return 1;
++	}
++	if (text[0] == '1' && text[1] == '0' && text[2] == '\0') {
++		*attempts = 10;
++		return 1;
++	}
+ 	return 0;
+ }
++#endif /* WITH_USB */
+ 
+ static int microlink_show_unmapped(void)
+ {
+@@ -738,6 +759,16 @@
+ #endif /* !WIN32 */
+ }
+ 
++static void microlink_guard_probe_require_device_present(void)
++{
++#ifdef WITH_USB
++	if (guard_probe_attempt_limit > 0 && is_usb && microlink_usb_device_gone()) {
++		fatalx(EXIT_FAILURE,
++			"apcmicrolink: guarded probe USB device gone; reopen is disabled");
++	}
++#endif /* WITH_USB */
++}
++
+ static void microlink_checksum(const unsigned char *buf, size_t len,
+ 	unsigned char *cb0, unsigned char *cb1)
+ {
+@@ -3285,15 +3316,26 @@
+ #endif /* WITH_USB */
+ 		if (microlink_guarded_stop_requested())
+ 			return 0;
++		microlink_guard_probe_require_device_present();
+ 		/* PowerChute's own comms-lost recovery (MicroLinkTranslator.
+ 		 * sendStop()/sendNak()) always sends STOP immediately before NAK,
+ 		 * never NAK alone - see MLINK_STOP_BYTE's comment. A STOP write
+ 		 * failure is treated the same as an INIT_BYTE write failure
+ 		 * (hard I/O error, not just "no reply yet"), matching how
+ 		 * MLINK_INIT_BYTE's own failure is handled just below. */
++#ifdef WITH_USB
++		if (guard_probe_attempt_limit > 0) {
++			if (guard_probe_attempts_used >= guard_probe_attempt_limit) {
++				return 0;
++			}
++			guard_probe_attempts_used++;
++		}
++#endif /* WITH_USB */
+ 		if (!microlink_send_simple(MLINK_STOP_BYTE)) {
++			microlink_guard_probe_require_device_present();
+ 			return 0;
+ 		}
++		microlink_guard_probe_require_device_present();
+ 		if (microlink_guarded_stop_requested())
+ 			return 0;
+ 
+@@ -3301,13 +3343,17 @@
+ 		if (is_usb && microlink_guard_deadline_expired())
+ 			return 0;
+ #endif /* WITH_USB */
++		microlink_guard_probe_require_device_present();
+ 		if (!microlink_send_simple(MLINK_INIT_BYTE)) {
++			microlink_guard_probe_require_device_present();
+ 			return 0;
+ 		}
++		microlink_guard_probe_require_device_present();
+ 		if (microlink_guarded_stop_requested())
+ 			return 0;
+ 
+ 		if (microlink_receive_once()) {
++			microlink_guard_probe_require_device_present();
+ 			if (microlink_guarded_stop_requested())
+ 				return 0;
+ 			consecutive_timeouts = 0;
+@@ -3317,6 +3363,7 @@
+ 				attempt + 1);
+ 			return microlink_prime_poll();
+ 		}
++		microlink_guard_probe_require_device_present();
+ 	}
+ 
+ 	return 0;
+@@ -3830,6 +3877,17 @@
+ 
+ 	is_usb = use_usb;
+ 	guarded_monitor = testvar("guarded_monitor");
++	if (testvar("guard_probe_attempts")) {
++		if (!microlink_parse_guard_probe_attempts(getval("guard_probe_attempts"),
++			&guard_probe_attempt_limit)) {
++			fatalx(EXIT_FAILURE,
++				"apcmicrolink: guard_probe_attempts must be a decimal integer from 1 to 10");
++		}
++		if (!guarded_monitor || !use_usb || hid_fallback_enabled) {
++			fatalx(EXIT_FAILURE,
++				"apcmicrolink: guard_probe_attempts requires guarded USB and hid_fallback=no");
++		}
++	}
+ 	if (guarded_monitor) {
+ 		const char *deadline_text = getval("guard_deadline");
+ 		char *end = NULL;
+@@ -3861,6 +3919,10 @@
+ 		}
+ 	}
+ #else
++	if (testvar("guard_probe_attempts")) {
++		fatalx(EXIT_FAILURE,
++			"apcmicrolink: guard_probe_attempts requires USB support");
++	}
+ 	if (!strcasecmp(device_path, "auto")) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink: port=auto requires USB support, "
+ 			"but this driver was not compiled with USB support");
+@@ -4057,8 +4119,19 @@
+ 	int good = 0;
+ 	time_t now = microlink_now();
+ 
++#ifdef WITH_USB
++	microlink_guard_probe_require_device_present();
++#endif /* WITH_USB */
++
+ 	if (!session_ready) {
+ 		int reopening = 0;
++#ifdef WITH_USB
++		microlink_guard_probe_require_device_present();
++		if (guard_probe_attempt_limit > 0 && guard_probe_attempts_used >= guard_probe_attempt_limit) {
++			fatalx(EXIT_FAILURE,
++				"apcmicrolink: guarded probe session lost after exhausting STOP/INIT attempts");
++		}
++#endif /* WITH_USB */
+ 
+ 		if (microlink_fallback_since == 0)
+ 			microlink_fallback_since = now;
+@@ -4075,6 +4148,7 @@
+ 		 * live-but-stalled tunnel in testing, so that's the only condition
+ 		 * that triggers one now - not a blind retry count. */
+ 		if (is_usb && microlink_usb_device_gone()) {
++			microlink_guard_probe_require_device_present();
+ 			upslogx(LOG_NOTICE, "apcmicrolink: USB device appears to have been "
+ 				"disconnected (unresponsive for %ld s) - reopening once it "
+ 					"reappears", (long)(now - microlink_fallback_since));
+@@ -4091,9 +4165,18 @@
+ 
+ 		if (!reopening) {
+ 			microlink_start_session_impl(1);
++			microlink_guard_probe_require_device_present();
+ 		}
+ 
+ 		if (!session_ready) {
++#ifdef WITH_USB
++			microlink_guard_probe_require_device_present();
++			if (guard_probe_attempt_limit > 0
++			 && guard_probe_attempts_used >= guard_probe_attempt_limit) {
++				fatalx(EXIT_FAILURE,
++					"apcmicrolink: guarded probe session lost after exhausting STOP/INIT attempts");
++			}
++#endif /* WITH_USB */
+ 			microlink_fallback_retries++;
+ 			microlink_session_next_retry = now + MLINK_SESSION_RETRY_INTERVAL_SEC;
+ 			poll_interval = MLINK_SESSION_RETRY_INTERVAL_SEC;
+@@ -4109,6 +4192,10 @@
+ 		good = 1;
+ 	}
+ 
++#ifdef WITH_USB
++	microlink_guard_probe_require_device_present();
++#endif /* WITH_USB */
++
+ 	/* A burst can span several seconds, so everything time-based below
+ 	 * needs the clock re-read rather than the value from before it. */
+ 	now = microlink_now();
+@@ -4117,6 +4204,14 @@
+ 
+ 	if (!good && microlink_midsession_timed_out(now)) {
+ 		if (!microlink_reconnect_session()) {
++#ifdef WITH_USB
++			microlink_guard_probe_require_device_present();
++			if (guard_probe_attempt_limit > 0
++			 && guard_probe_attempts_used >= guard_probe_attempt_limit) {
++				fatalx(EXIT_FAILURE,
++					"apcmicrolink: guarded probe session lost after exhausting STOP/INIT attempts");
++			}
++#endif /* WITH_USB */
+ 			microlink_datastale_or_fallback();
+ 			return;
+ 		}
+@@ -4135,6 +4230,14 @@
+ 	if (!good) {
+ 		if (parsed_frames == 0) {
+ 			session_ready = 0;
++#ifdef WITH_USB
++			microlink_guard_probe_require_device_present();
++			if (guard_probe_attempt_limit > 0
++			 && guard_probe_attempts_used >= guard_probe_attempt_limit) {
++				fatalx(EXIT_FAILURE,
++					"apcmicrolink: guarded probe session lost after exhausting STOP/INIT attempts");
++			}
++#endif /* WITH_USB */
+ 			microlink_datastale_or_fallback();
+ 			return;
+ 		}
+@@ -4190,6 +4293,9 @@
+ 		"Power Device usages when the Microlink tunnel has nothing fresh, "
+ 		"instead of going stale (USB only; yes/no, default yes)");
+ #endif /* WITH_USB */
++	addvar(VAR_VALUE, "guard_probe_attempts",
++		"Limit guarded USB probe STOP/INIT attempts for the process (1-10; "
++		"requires guarded USB and hid_fallback=no)");
+ 	addvar(VAR_VALUE, "baudrate", "Serial port baud rate (e.g. 9600, 19200, 38400)");
+ 	addvar(VAR_VALUE, "showinternals",
+ 		"Show Microlink internal runtime values (yes/no, default follows debug mode)");
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -2744,6 +2744,11 @@
+ 		fatalx(EXIT_FAILURE,
+ 			"Error: specifying '-a id' or '-s id' is now mandatory. Try -h for help.");
+ 	}
+ 
++	if (testvar("guard_probe_attempts") && !testvar("guarded_monitor")) {
++		fatalx(EXIT_FAILURE,
++			"guard_probe_attempts requires guarded_monitor");
++	}
++
+ 	if (testvar("guarded_monitor")) {
+ # ifdef WIN32
+--- a/drivers/apcmicrolink-usb.c
++++ b/drivers/apcmicrolink-usb.c
+@@ -813,6 +813,9 @@
+ #if WITH_LIBUSB_1_0 && defined(HAVE_PTHREAD)
+ 	int async_ret;
+ #endif
++	if (testvar("guard_probe_attempts")) {
++		return 0;
++	}
+ 	if (microlink_usb_guarded_stop_requested()) {
+ 		return 0;
+ 	}

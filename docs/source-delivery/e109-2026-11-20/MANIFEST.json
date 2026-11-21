@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "state": "PACKAGED_DATA_ONLY_NOT_BUILT",
+  "bundle_kind": "closed directory",
+  "profile": "ups-monitor-e109-2026-11-20",
+  "payload_files": [
+    {
+      "path": "START_HERE.md",
+      "bytes": 12224,
+      "sha256": "ece8ed613c82391e24b042b2c4bf249d90b837f5597ebf787c70f3764f42a6da",
+      "mode": "0644",
+      "origin_public": "E110 delivery guide for this source handoff"
+    },
+    {
+      "path": "sources/UPS-Monitor-E96-E98-App-Source.tar",
+      "bytes": 2078720,
+      "sha256": "41f5a4081a2964c3e55b964e082a5601ee22fb9d7d8b4a8357e8fff7e0e3c506",
+      "mode": "0644",
+      "origin_public": "E106 app-source archive; root ups-monitor-app-source"
+    },
+    {
+      "path": "sources/UPS-Monitor-E96-Native-Source.tar",
+      "bytes": 40273920,
+      "sha256": "3995e50bc2f857104f756fc59e6cfb48b2c3dd82dd37627353c9820c8ad47ec5",
+      "mode": "0644",
+      "origin_public": "E104 native-source archive; root UPS-Monitor-E96-Native-Source"
+    },
+    {
+      "path": "docs/APP_SOURCE_DELIVERY.md",
+      "bytes": 22015,
+      "sha256": "d83e21896711f76f719085fb1f3af8baef2e9b495d6bc0287c067971de2613e8",
+      "mode": "0644",
+      "origin_public": "Frozen E109 guide: docs/APP_SOURCE_DELIVERY.md"
+    },
+    {
+      "path": "docs/NATIVE_SOURCE_DELIVERY.md",
+      "bytes": 7966,
+      "sha256": "afca750ec9158fd1cd4242e9f30452c2f66e0b00f9f89ddfbb1756ac4917d216",
+      "mode": "0644",
+      "origin_public": "Frozen E109 guide: docs/NATIVE_SOURCE_DELIVERY.md"
+    },
+    {
+      "path": "docs/DISTRIBUTION_READINESS.md",
+      "bytes": 22171,
+      "sha256": "5c8a6100f5230387c984452cdff9b6d8271337e7b58acac6cef97c24257ac6af",
+      "mode": "0644",
+      "origin_public": "Frozen E109 guide: docs/DISTRIBUTION_READINESS.md"
+    },
+    {
+      "path": "docs/CPYTHON_RUNTIME_CHANGES.md",
+      "bytes": 9957,
+      "sha256": "1b18015e7ff0c39a2cd1d1bf631b4c2b82c331b798d7e0272aaa91f4ea06cd1f",
+      "mode": "0644",
+      "origin_public": "E106 app-source archive member: ups-monitor-app-source/runtime-notes/CPYTHON_RUNTIME_CHANGES.reference.txt"
+    }
+  ],
+  "archive_roots": {
+    "E106": "CHECKOUT_ROOT = extracted ups-monitor-app-source",
+    "E104_direct": "INPUT_ROOT/UPS-Monitor-E96-Native-Source for original inputs, restore script and notices",
+    "E104_restored_recipe": "RECIPE_ROOT/recipe for the applicable scripts and native tool guide"
+  },
+  "external_prerequisites": {
+    "host": [
+      "Apple Silicon macOS 27",
+      "trusted arm64 Python 3.15.2 with compression.zstd",
+      "Xcode 27.2 build 27B52 and macOS SDK 27.2",
+      "Apple Swift 6.4.2",
+      "system-selected clang for ordinary Swift tests"
+    ],
+    "native_build_tooling": {
+      "required_tool_guide": "UPS-Monitor-E96-Native-Source/recipe/backend/nut/native-build/hidapi-0.16/README.md",
+      "versions": {
+        "autoconf": "2.73",
+        "automake": "1.19",
+        "GNU libtool": "2.6.2",
+        "m4": "1.4.21",
+        "pkgconf": "3.0.11",
+        "libusb": "1.0.30",
+        "GNU make": "3.81"
+      }
+    },
+    "pins_acquired_before_offline": {
+      "external_status": "NOT_CHECKED",
+      "pbs": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.15.2+20261026-aarch64-apple-darwin-pgo+lto-full.tar.zst",
+        "sha256": "17a41099bba8c18c45c527580014e75dc7a77300f619d7f5cdfecc57aca06f39",
+        "bytes": 69311061
+      },
+      "wheels": [
+        {
+          "filename": "pyinstaller-6.22.3-py3-none-macosx_10_13_universal2.whl",
+          "sha256": "052f4a1cd4f81092ccb7a18fe8ebc9ecf832a5917317e39fb3775af4e959b253",
+          "bytes": 1071847,
+          "url": "https://files.pythonhosted.org/packages/ec/af/898f70947e27f8e65d55183c780e77112e023c0b4a6fba6255d4d563a27d/pyinstaller-6.22.3-py3-none-macosx_10_13_universal2.whl"
+        },
+        {
+          "filename": "altgraph-0.17.5-py2.py3-none-any.whl",
+          "sha256": "f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597",
+          "bytes": 21228,
+          "url": "https://files.pythonhosted.org/packages/a9/ba/000a1996d4308bc65120167c21241a3b205464a2e0b58deda26ae8ac21d1/altgraph-0.17.5-py2.py3-none-any.whl"
+        },
+        {
+          "filename": "macholib-1.16.4-py2.py3-none-any.whl",
+          "sha256": "da1a3fa8266e30f0ce7e97c6a54eefaae8edd1e5f86f3eb8b95457cae90265ea",
+          "bytes": 38117,
+          "url": "https://files.pythonhosted.org/packages/c7/d1/a9f36f8ecdf0fb7c9b1e78c8d7af12b8c8754e74851ac7b94a8305540fc7/macholib-1.16.4-py2.py3-none-any.whl"
+        },
+        {
+          "filename": "packaging-26.3-py3-none-any.whl",
+          "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+          "bytes": 129956,
+          "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl"
+        },
+        {
+          "filename": "pyinstaller_hooks_contrib-2026.9-py3-none-any.whl",
+          "sha256": "fb3e67dd64122561724c48ad0366ac9e8c16e638b63bf7d85de03bf3fdbf06c3",
+          "bytes": 462931,
+          "url": "https://files.pythonhosted.org/packages/93/fe/ded0e20de0580257d97dbabb4db7ab4d96ad8ade7d41149e66308057cf52/pyinstaller_hooks_contrib-2026.9-py3-none-any.whl"
+        },
+        {
+          "filename": "setuptools-84.2.1-py3-none-any.whl",
+          "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+          "bytes": 876263,
+          "url": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl"
+        }
+      ]
+    },
+    "app_signing": "recipient's local Apple Development identity, team and App Group",
+    "optional_swift_interop": {
+      "inputs": [
+        "trusted patched relocatable upsc",
+        "adjacent libupsclient.7.dylib",
+        "verified host Python"
+      ],
+      "variables": [
+        "UPS_TEST_UPSC",
+        "UPS_TEST_UPSC_SHA256",
+        "UPS_TEST_PYTHON"
+      ],
+      "endpoint": "127.0.0.1 ephemeral synthetic server",
+      "without_inputs": "two declared skips in the ordinary suite; no claim of 455 default passes"
+    }
+  },
+  "excluded": [
+    "developer kit binary or archive",
+    "PBS payload",
+    "wheel payloads",
+    "app archives",
+    "reader/helper executables",
+    "optional client binaries",
+    "signing identities",
+    "private raw receipts/logs",
+    "repository metadata"
+  ],
+  "execution": {
+    "build": "NOT_RUN",
+    "tests": "NOT_RUN",
+    "product": "NOT_RUN",
+    "USB": "NOT_RUN",
+    "publisher": "NOT_RUN"
+  },
+  "limits": [
+    "The two source archives and four guide files are copied as pinned data; archive payloads are not extracted by this packager.",
+    "The E106 CPython runtime note is copied from its pinned archive member; current guide copies remain separate from historical archive copies.",
+    "Do not infer app compatibility, release approval, redistribution permission, build/test success, hardware behavior, or external prerequisite availability from this data package."
+  ]
+}

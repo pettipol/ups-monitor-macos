@@ -1,0 +1,15 @@
+NativeProducerNotices
+
+This resource directory accompanies the NativeProducerNotices bundle resource. It preserves the upstream notice texts used by the native producer candidate.
+
+NUT
+The NUT COPYING, LICENSE-GPL2, and LICENSE-GPL3 files are copied from the locally retained NUT source snapshot at commit 73c4502191d025e35122463986a80c676e734b04. They retain the upstream project terms and attributions; consult the corresponding NUT source files for component-specific notices.
+
+HIDAPI
+The four HIDAPI notice files are the unmodified files from libusb/hidapi tag hidapi-0.15.0. LICENSE.txt documents three alternative licensing options. For the candidate represented by this package, the selected option is the BSD-style license in LICENSE-bsd.txt. The other two license texts are preserved as upstream provenance and are not selected cumulatively. Retain the BSD copyright notice, conditions, disclaimer, and no-endorsement condition with distributions.
+
+Sources:
+- NUT: https://github.com/networkupstools/nut/tree/73c4502191d025e35122463986a80c676e734b04
+- HIDAPI: https://github.com/libusb/hidapi/tree/hidapi-0.15.0
+
+This directory records notice provenance and the candidate's stated HIDAPI option. It does not state a general legal conclusion about any complete application or distribution.

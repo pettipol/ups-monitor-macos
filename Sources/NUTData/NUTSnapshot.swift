@@ -186,6 +186,7 @@ public struct NUTStatus: Codable, Equatable, Sendable {
 
 public enum NUTSnapshotProvider: String, Codable, Sendable {
     case upscOutput
+    case driverDumpOutput
 }
 
 public struct NUTSnapshot: Codable, Equatable, Sendable {
@@ -196,9 +197,9 @@ public struct NUTSnapshot: Codable, Equatable, Sendable {
     public let status: NUTStatus
     public let metrics: [NUTMetricID: NUTMetric]
 
-    public init(sourceID: String, capturedAt: Date, status: NUTStatus, metrics: [NUTMetricID: NUTMetric]) {
+    public init(sourceID: String, capturedAt: Date, status: NUTStatus, metrics: [NUTMetricID: NUTMetric], provider: NUTSnapshotProvider = .upscOutput) {
         self.sourceID = sourceID
-        self.provider = .upscOutput
+        self.provider = provider
         self.capturedAt = capturedAt
         self.status = status
         self.metrics = metrics

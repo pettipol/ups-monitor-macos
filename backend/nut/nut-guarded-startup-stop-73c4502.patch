@@ -1,0 +1,154 @@
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -2178,6 +2178,11 @@
+ 	guarded_dump_signal = sig;
+ }
+ 
++int nut_guarded_dump_signal_requested(void)
++{
++	return guarded_dump_signal != 0;
++}
++
+ static int setup_guarded_dump_signals(void)
+ {
+ 	struct sigaction sa;
+--- a/drivers/main.h
++++ b/drivers/main.h
+@@ -30,6 +30,11 @@
+ 
+ int drv_main(int argc, char **argv);
+ 
++#ifndef WIN32
++/* Read-only checkpoint for cooperative guarded startup cancellation. */
++int nut_guarded_dump_signal_requested(void);
++#endif /* !WIN32 */
++
+ /* functions & variables required in each driver
+  * See also: register_upsdrv_callbacks()
+  */
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -353,6 +353,8 @@
+ static int microlink_send_simple(unsigned char byte);
+ static int microlink_send_write(unsigned char id, unsigned char offset,
+ 	unsigned char len, const unsigned char *data);
++
++static int microlink_guarded_stop_requested(void);
+ static int microlink_update_blob(void);
+ static int microlink_parse_descriptor(void);
+ static int microlink_send_descriptor_mask_value(const char *path, uint64_t mask);
+@@ -725,6 +727,15 @@
+ 
+ 	snprintf(msg, sizeof(msg), "microlink %s", label);
+ 	upsdebug_hex(level, msg, buf, len);
++}
++
++static int microlink_guarded_stop_requested(void)
++{
++#ifndef WIN32
++	return guarded_monitor && nut_guarded_dump_signal_requested();
++#else
++	return 0;
++#endif /* !WIN32 */
+ }
+ 
+ static void microlink_checksum(const unsigned char *buf, size_t len,
+@@ -2716,6 +2727,10 @@
+ 	unsigned char cb0, cb1;
+ 	size_t framelen = 0;
+ 
++	if (microlink_guarded_stop_requested()) {
++		return 0;
++	}
++
+ 	frame[framelen++] = id;
+ 	frame[framelen++] = offset;
+ 	frame[framelen++] = len;
+@@ -2739,7 +2754,7 @@
+ 	return 1;
+ }
+ 
+-static int microlink_send_simple(unsigned char byte)
++static int microlink_send_simple_raw(unsigned char byte)
+ {
+ 	microlink_trace_frame(2, "TX ctrl", &byte, 1);
+ 
+@@ -2752,6 +2767,15 @@
+ 	return ser_send_buf(upsfd, &byte, 1) == 1;
+ }
+ 
++static int microlink_send_simple(unsigned char byte)
++{
++	if (microlink_guarded_stop_requested()) {
++		return 0;
++	}
++
++	return microlink_send_simple_raw(byte);
++}
++
+ static int microlink_try_extract_frame_at(unsigned char *frame, size_t *framelen,
+ 	const unsigned char *const sourcebuf, const size_t sourcebuf_len)
+ {
+@@ -3259,6 +3283,8 @@
+ 		if (is_usb && microlink_guard_deadline_expired())
+ 			return 0;
+ #endif /* WITH_USB */
++		if (microlink_guarded_stop_requested())
++			return 0;
+ 		/* PowerChute's own comms-lost recovery (MicroLinkTranslator.
+ 		 * sendStop()/sendNak()) always sends STOP immediately before NAK,
+ 		 * never NAK alone - see MLINK_STOP_BYTE's comment. A STOP write
+@@ -3268,6 +3294,8 @@
+ 		if (!microlink_send_simple(MLINK_STOP_BYTE)) {
+ 			return 0;
+ 		}
++		if (microlink_guarded_stop_requested())
++			return 0;
+ 
+ #ifdef WITH_USB
+ 		if (is_usb && microlink_guard_deadline_expired())
+@@ -3276,8 +3304,12 @@
+ 		if (!microlink_send_simple(MLINK_INIT_BYTE)) {
+ 			return 0;
+ 		}
++		if (microlink_guarded_stop_requested())
++			return 0;
+ 
+ 		if (microlink_receive_once()) {
++			if (microlink_guarded_stop_requested())
++				return 0;
+ 			consecutive_timeouts = 0;
+ 			last_poll_success = microlink_now();
+ 			session_ready = 1;
+@@ -3767,6 +3799,9 @@
+ {
+ 	int use_usb = 0;
+ 	time_t now = microlink_now();
++#ifdef WITH_USB
++	int open_result;
++#endif /* WITH_USB */
+ 
+ 	srand((unsigned int)now);
+ 
+@@ -3819,7 +3854,11 @@
+ 		}
+ 	}
+ 	if (use_usb) {
+-		microlink_usb_open();
++		open_result = microlink_usb_open();
++		if (guarded_monitor && open_result != 1) {
++			microlink_usb_close();
++			fatalx(EXIT_FAILURE, "apcmicrolink: guarded USB open did not establish a usable session");
++		}
+ 	}
+ #else
+ 	if (!strcasecmp(device_path, "auto")) {
+@@ -4188,7 +4227,7 @@
+ 	 * debug line and nothing more. */
+ 	if (microlink_get_object(MLINK_OBJ_PROTOCOL)->seen) {
+ 		session_ready = 0;
+-		if (!microlink_send_simple(MLINK_STOP_BYTE)) {
++		if (!microlink_send_simple_raw(MLINK_STOP_BYTE)) {
+ 			upsdebugx(1, "microlink: could not send STOP while closing "
+ 				"the session");
+ 		}

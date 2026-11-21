@@ -33,7 +33,8 @@ public actor WidgetSnapshotPublisher {
               uptime.isFinite, uptime >= 0, (try? value.validate()) != nil,
               lastSequence.map({ sequence > $0 }) ?? true else { return .rejected }
         lastSequence = sequence
-        if inFlight == nil, let lastShared, Self.sameContent(value, lastShared) { return .unchanged }
+        if inFlight == nil, let lastShared, Self.sameContent(value, lastShared),
+           !hasPendingLifecycleRefresh(for: value) { return .unchanged }
         pending = Publication(value: value, now: now, uptime: uptime)
         if inFlight == nil { inFlight = Task { await self.drain() } }
         await inFlight?.value
@@ -62,11 +63,21 @@ public actor WidgetSnapshotPublisher {
         guard let previous = lastReloadUptime else { return true }
         let elapsed = publication.uptime - previous
         guard elapsed >= 0 else { return false }
+        if hasPendingLifecycleRefresh(for: publication.value) { return true }
         let changedState = publication.value.acquisition != lastReloadSnapshot?.acquisition
             || publication.value.presentationName != lastReloadSnapshot?.presentationName
             || publication.value.snapshot?.source != lastReloadSnapshot?.snapshot?.source
             || publication.value.snapshot?.status != lastReloadSnapshot?.snapshot?.status
         return elapsed >= 300 || (changedState && elapsed >= 30)
+    }
+
+    private func hasPendingLifecycleRefresh(for value: WidgetSnapshot) -> Bool {
+        let opensSession = value.acquisition == .active
+            && value.snapshot != nil
+            && (lastReloadSnapshot?.acquisition == .stopped || lastReloadSnapshot?.snapshot == nil)
+        let closesSession = value.acquisition == .stopped
+            && lastReloadSnapshot?.acquisition != .stopped
+        return opensSession || closesSession
     }
 
     private static func sameContent(_ lhs: WidgetSnapshot, _ rhs: WidgetSnapshot) -> Bool {

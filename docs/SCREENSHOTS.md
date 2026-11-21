@@ -1,9 +1,23 @@
 # Screenshots and Visual Evidence
 
-App captures were reviewed on 2026-10-08; the compact widget preview was added
-on 2026-10-11. These are original project artifacts, not
+Initial app captures were reviewed on 2026-10-08; the compact widget preview
+was added on 2026-10-11 and the archive import capture on 2026-10-24.
+These are original project artifacts, not
 marketing mockups. All displayed readings are **synthetic fixtures**, not
-measurements from a connected UPS. No installed-widget screenshot is available.
+measurements from a connected UPS.
+
+No installed-widget screenshot has been exported. On 2026-11-04, the
+system-hosted synthetic widget from the earlier E57/E58 candidate was visually
+observed inline in small and medium sizes after Stop; its values came from that
+fixture and no image file was saved. The E61 widget was not observed during the
+later E62 session. Neither observation is a real-UPS measurement or a live-update
+qualification.
+
+## Installed E70 medium widget, November 6, 2026
+
+The identified WidgetKit extension displayed the ordinary synthetic fixture on the macOS desktop. Before its first publication the medium widget read **Shared data unavailable**. It subsequently showed **74%** charge, **35 min** estimated runtime, **180 W** and **215 VA**, both power values labeled driver-derived. Load and input/output voltage were shown as **Not reported**. Immediately after an app refresh the desktop widget still displayed an older capture. After normal Quit, the same medium widget showed **Stopped · stale · On line** with a later capture time and the readings retained.
+
+The signed candidate was observed directly. The retained evidence is a transcript because the archived image response was truncated. The supervised managed-session attempt had already timed out before Start. The observations above concern the ordinary simulated fixture.
 
 ## Running App
 
@@ -41,6 +55,29 @@ The UPS energy estimate has only five covered seconds. Input energy is
 unavailable because eligible input watts are absent. The battery-charge plot is
 synthetic history; recording is off. Neither this image nor the fixture's clock
 is evidence of continuous live acquisition or energy-meter accuracy.
+
+## Archived Observation Import — Synthetic Data
+
+![Running archive import with synthetic data: declared origin, original times, battery charge and estimated runtime](images/app-archive-synthetic.jpg)
+
+This unedited, window-only capture was taken on 2026-10-24 from the native
+Release app running `--synthetic-preview` on macOS 27.0.1 / Apple Silicon.
+The imported bundle is a synthetic fixture: 70% charge and 600 seconds of
+estimated runtime are demonstration values, not measurements from a UPS.
+The original fixture times remain visible. The all-`a` executable hash is
+deliberately fake; matching it does not authenticate an archive or a device.
+
+The view keeps `Archived · Unqualified`, caller-declared synthetic origin,
+and the unsigned-receipt/no-live-freshness labels visible. Importing the bundle
+does not replace the main preview snapshot. Lower rows are outside the viewport;
+this image does not demonstrate continuous monitoring or an installed widget.
+
+The local working-tree build includes `ArchivedObservationView.swift` at SHA-256
+`abb061e8ba4417eb42feb9d7993599610c3edbdf436ab0112b9d4b57be0e3a30`.
+The folder accessibility label/value was checked before selection, after selection
+and after changing folders; the import flow was exercised afterward. This is an
+accessibility-tree check, not a VoiceOver qualification. The JPEG is 1120 × 1336
+pixels, SHA-256 `d3b1bd3afca75d4fc3078589ab62768abbc24da7672bcaf683e542850c9190e1`.
 
 ## Widget View: Offscreen Only
 
@@ -89,7 +126,20 @@ The small canvas retains the renderer placeholder and abbreviated footer. The
 January 2027 fixture date mismatch described above still applies. This image
 is not evidence of an installed widget or live target-UPS telemetry.
 
-## Interactive Check: Partial
+## System-Hosted Widget: Synthetic Stopped Snapshot (2026-11-04)
+
+The system-hosted **UPS Monitor Synthetic Test** widget was visually observed
+in small and medium sizes after the E57 fixture session stopped. The medium
+view showed 91% charge, a 49.92-minute estimated runtime,
+`Stopped · stale · On line`, and the original acquisition time. These were
+synthetic fixture values. The observation was inline only; no screenshot was
+exported. It does not show updates while acquisition is running, real UPS
+readings, long-term freshness, VoiceOver or daily use. See [widget signing and
+limits](WIDGET_SIGNING.md) and the [release checklist](RELEASE_CHECKLIST.md).
+
+## App Interaction Checks: Partial
+
+### Synthetic Preview (2026-10-11)
 
 The coordinating reviewer observed these synthetic app behaviors:
 
@@ -103,10 +153,25 @@ The coordinating reviewer observed these synthetic app behaviors:
 - The normal application-menu Quit command ended the owned process; reopening
   with the same explicit preview flag succeeded.
 
-This is not full accessibility or UI acceptance. VoiceOver, enlarged text,
-light-mode app layout, other window sizes, the menu-bar popover, actual history
-and exports, notifications, backend settings and installed-widget interaction
-remain unqualified. The preview never publishes to the shared widget cache.
+This `--synthetic-preview` mode does not publish to the shared widget cache.
+The check is not full accessibility or UI acceptance. VoiceOver, enlarged text,
+light mode, other window sizes, menu-bar popover behavior, actual history and
+exports, notifications and backend settings remain unqualified.
+
+### Managed Synthetic Session (2026-11-04)
+
+In the E62 session on the assembled E61 synthetic package, the app opened idle,
+showed 90% charge / 3,000 seconds and then 91% / 2,995 seconds after one Start,
+stopped normally with the final sample marked stale, and quit normally. The
+managed receipt records two samples and confirms child reap, process-group
+absence, both output EOFs and consumer quiescence. The UI was inspected through
+the existing accessibility binding. No image file was exported. This bounded
+synthetic lifecycle observation does not prove real UPS communication, driver
+cleanup, long-running continuity, full GUI accessibility or widget refresh
+during acquisition. The E61 widget extension was not observed; the separate
+stopped/stale small and medium widget observation above belongs to E57/E58. See
+the [managed runtime contract](FROZEN_OPERATIONAL_RUNTIME.md) and [release
+checklist](RELEASE_CHECKLIST.md).
 
 ## Compact Apple Name Preview (2026-10-11)
 

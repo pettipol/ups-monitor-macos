@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "profile": "pbs-cpython-3.15.2-aarch64-20261026",
+  "archive": {
+    "sha256": "17a41099bba8c18c45c527580014e75dc7a77300f619d7f5cdfecc57aca06f39",
+    "bytes": 69311061
+  },
+  "metadata": {
+    "path": "python/PYTHON.json",
+    "sha256": "6256d1667b03c2f582c7ba0b4c058f59acd02c8b1819ceca3ce904349e13e1bc",
+    "bytes": 143153
+  },
+  "expected": {
+    "python_version": "3.15.2",
+    "target_triple": "aarch64-apple-darwin",
+    "python_exe": "install/bin/python3.15",
+    "apple_sdk_deployment_target": "11.0"
+  },
+  "limits": {
+    "seconds": 120,
+    "members": 20000,
+    "total_bytes": 4294967296,
+    "selected_bytes": 1073741824,
+    "file_bytes": 134217728
+  },
+  "provenance": {
+    "provider": "astral-sh/python-build-standalone",
+    "release": "20261026",
+    "upstream_commit": "fa506e0858ac9f2cc5b289c137b888a2aa24d1ee",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.15.2+20261026-aarch64-apple-darwin-pgo+lto-full.tar.zst"
+  }
+}

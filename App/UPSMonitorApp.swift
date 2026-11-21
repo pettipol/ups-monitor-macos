@@ -56,8 +56,16 @@ private final class MonitorApplicationDelegate: NSObject, NSApplicationDelegate 
         guard !terminating else { return .terminateLater }
         terminating = true
         Task {
-            await model.stop()
-            sender.reply(toApplicationShouldTerminate: true)
+            let mayQuit = await model.prepareToQuit()
+            sender.reply(toApplicationShouldTerminate: mayQuit)
+            if !mayQuit {
+                terminating = false
+                let alert = NSAlert()
+                alert.messageText = "Monitoring could not be confirmed stopped"
+                alert.informativeText = "The app stays open for inspection; no new session will start."
+                alert.addButton(withTitle: "Keep app open")
+                alert.runModal()
+            }
         }
         return .terminateLater
     }
@@ -69,8 +77,12 @@ private struct MonitorMenu: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.isSyntheticMode {
-                Text(model.syntheticModeTitle).font(.caption).foregroundStyle(.orange).padding(.top, 10)
+            if model.isSyntheticMode || model.isManagedMode {
+                Text(model.isManagedMode ? model.managedSessionTitle : model.syntheticModeTitle)
+                    .font(.caption).foregroundStyle(.orange).padding(.top, 10)
+            }
+            if model.isManagedMode {
+                ManagedSessionControls(model: model).padding(10)
             }
             UPSMenuContentView(
                 sources: model.sources, presentationNamesBySourceKey: model.presentationNamesBySourceKey,
@@ -95,22 +107,26 @@ private struct MonitorMenu: View {
 
 private struct MonitorWindow: View {
     @Bindable var model: MonitorAppModel
+    @State private var archivedObservation = ArchivedObservationModel()
+    @State private var showsArchivedObservation = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                if model.isSyntheticMode {
-                    Label(model.syntheticModeTitle, systemImage: "bolt.horizontal.circle")
+                if model.isSyntheticMode || model.isManagedMode {
+                    Label(model.isManagedMode ? model.managedSessionTitle : model.syntheticModeTitle, systemImage: "bolt.horizontal.circle")
                 } else {
                     Picker("Backend", selection: Binding(
                         get: { model.backend },
                         set: { backend in
                             if backend == .nut { model.showsNUTSettings = true }
+                            else if backend == .supervisedSession { model.chooseSupervisedSessionDirectory() }
                             else { Task { await model.useAppleBackend() } }
                         }
                     )) {
                         Text("Apple").tag(MonitorBackend.apple)
                         Text("Local NUT").tag(MonitorBackend.nut)
+                        Text("USB session").tag(MonitorBackend.supervisedSession)
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 220)
@@ -124,7 +140,13 @@ private struct MonitorWindow: View {
                     if model.backendTransition { ProgressView().controlSize(.small) }
                 }
                 Spacer(minLength: 8)
-                if !model.isSyntheticMode {
+                if model.isManagedMode { ManagedSessionControls(model: model) }
+                Button { showsArchivedObservation = true } label: {
+                    Image(systemName: "archivebox")
+                }
+                .help("Open archived observation")
+                .accessibilityLabel("Open archived observation")
+                if !model.isSyntheticMode && !model.isSupervisedSession {
                     Button { model.showsAlertSettings = true } label: {
                         Image(systemName: model.alerts.isEnabled ? "bell.badge" : "bell")
                     }
@@ -144,6 +166,23 @@ private struct MonitorWindow: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
             Divider()
+
+            if model.isSupervisedSession {
+                Label("Supervised session · unqualified", systemImage: "externaldrive.badge.timemachine")
+                    .font(.caption).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18).padding(.vertical, 6)
+                Text("Stop monitoring here does not send UPS commands.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18).padding(.bottom, 6)
+                if !model.isManagedSyntheticMode {
+                    Text("Battery and UPS temperature labels share one descriptor reading.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18).padding(.bottom, 6)
+                }
+            }
 
             if let message = model.widgetMessage {
                 Label(message, systemImage: "square.grid.2x2")
@@ -177,7 +216,8 @@ private struct MonitorWindow: View {
                 acquisitionSucceeded: model.acquisitionSucceeded,
                 history: model.history,
                 energyEstimates: model.energyEstimates,
-                onResetEnergy: !model.isSyntheticMode ? { @MainActor @Sendable [model] in model.resetEnergy() } : nil,
+                onResetEnergy: !model.isSyntheticMode && !model.isSupervisedSession
+                    ? { @MainActor @Sendable [model] in model.resetEnergy() } : nil,
                 onExportEnergy: model.canExportEnergy ? { @MainActor @Sendable [model] in model.exportEnergy() } : nil,
                 onSelect: { model.select($0) }, onRefresh: { model.refresh() },
                 onExportJSON: model.canExport ? { @MainActor @Sendable [model] in model.export(.json) } : nil,
@@ -194,6 +234,28 @@ private struct MonitorWindow: View {
                               onCancel: { model.showsNUTSettings = false })
                 .interactiveDismissDisabled(model.backendTransition)
         }
+        .sheet(isPresented: $model.showsSupervisedSessionPicker) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Supervised USB session").font(.title2)
+                Text("Choose a session directory that is already being produced externally. This app only reads its files; it does not start a driver.")
+                    .foregroundStyle(.secondary)
+                if let directory = model.supervisedSessionDirectoryURL {
+                    Text(directory.lastPathComponent).font(.caption.monospaced())
+                }
+                if let message = model.supervisedSessionMessage {
+                    Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
+                HStack {
+                    Button("Choose directory") { model.chooseSupervisedSessionDirectory() }
+                    Spacer()
+                    Button("Cancel") { model.showsSupervisedSessionPicker = false }
+                    Button("Connect") { Task { await model.connectSupervisedSession() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.supervisedSessionDirectoryURL == nil || model.backendTransition)
+                }
+            }
+            .padding(22).frame(width: 470)
+        }
         .sheet(item: $model.historyBrowser) { browser in
             HistoryBrowserView(model: browser)
         }
@@ -202,6 +264,24 @@ private struct MonitorWindow: View {
         }
         .sheet(isPresented: $model.showsWidgetStatus) {
             WidgetStatusView(model: model.widgetInstallation)
+        }
+        .sheet(isPresented: $showsArchivedObservation, onDismiss: { archivedObservation.clear() }) {
+            ArchivedObservationView(model: archivedObservation)
+        }
+    }
+}
+
+private struct ManagedSessionControls: View {
+    @Bindable var model: MonitorAppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(model.managedSessionMessage).font(.caption).foregroundStyle(.orange)
+            HStack {
+                Button(model.managedSessionStartTitle) { Task { await model.startManagedSession() } }
+                    .disabled(model.managedSyntheticSession.attempted || model.backendTransition)
+                Button("Stop session") { Task { await model.stopManagedSession() } }
+                    .disabled(!model.managedSyntheticSession.canStop)
+            }
         }
     }
 }

@@ -82,11 +82,24 @@ publishes stale status without changing the measurement time. A bounded latest-
 pending publisher prevents an earlier queued state from replacing a later one.
 
 Ordinary reload requests are at least five minutes apart. A changed source or
-status can request an earlier reload after at least 30 seconds. These are request
-limits, not an update guarantee. The provider plans entries at five-minute
-intervals and requests another timeline after 15 minutes. The UI always describes
-a capture and shows a system-relative age. A stale label can be delayed by system
-scheduling; the widget must never be used as a real-time alarm or shutdown guard.
+status can request an earlier reload after at least 30 seconds. After a successful
+store write and a nondecreasing monotonic-time check, the first valid `.active`
+snapshot requests a refresh when the last requested state was `.stopped` or had no
+sample. The first `.stopped` state requests a refresh when the last requested state
+was not `.stopped`. These transitions are derived from the last request, not a
+publisher-lifetime flag, so later sessions can request their own opening and
+closing refresh. A value-only change while the requested state remains `.stopped`
+can be stored without a redraw until ordinary cadence or another transition.
+Repeated samples and duplicate Stop/Quit calls do not add requests, except that an
+identical active/Stop publication can retry a still-pending lifecycle request after
+a monotonic-time regression; once that transition was requested, duplicates are
+deduplicated again. Distinct short sessions can each request two refreshes. If no
+valid active sample arrives, no opening request is made. These are requests, not
+an update guarantee: WidgetKit can delay execution. The provider plans entries at
+five-minute intervals and requests another timeline after 15 minutes. The UI
+always describes a capture and shows a system-relative age. A stale label can be
+delayed by system scheduling; the widget must never be used as a real-time alarm
+or shutdown guard.
 See [Apple's refresh guidance](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date).
 
 ## Synthetic Widget Fixture
