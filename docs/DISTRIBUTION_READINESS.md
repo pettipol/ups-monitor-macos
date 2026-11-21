@@ -8,6 +8,12 @@ The four-file profile contains no binaries and does not close distribution,
 installation or hardware qualification. Historical delivery profiles remain
 unchanged.
 
+The [runtime source and notice checks](RUNTIME_SOURCE_NOTICE_CHECKS.md)
+reproduce the E122 PyInstaller hook's exact compiled data and inspect the
+PBS-declared OpenSSL source archive and retained license. These close the
+specific provenance questions recorded there; package-wide redistribution
+review and hardware qualification remain open.
+
 The optional [first-IO diagnostic source profile](../backend/nut/native-build/first-io-v1/README.md)
 is a later source-only candidate. It keeps the historical delivery identities
 below unchanged. Its patch reconstruction is separate from a native rebuild,
