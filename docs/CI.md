@@ -1,6 +1,32 @@
 # Continuous Integration
 
-## Current source review: 2026-11-19
+## Hosted candidate attempt: 2026-11-21
+
+[Run 44923796013](https://github.com/pettipol/ups-monitor-macos/actions/runs/44923796013)
+tested PR head `03919651765827aa1116cb714a4e7c5e2067a0df` through merge
+commit `6150d969d90feb281077395b73e40c70d341d352`. Its tree
+`035c3ee59c3e8f0cb3c6c28e2cc7bf04157363b3` exactly matches the reviewed
+local source candidate. Offline reader contracts passed. The build job
+provisioned Python 3.15.2 and passed both the synthetic preflight guards and
+the real Xcode 27.2/27B52, Swift 6.4.2 and Python preflight on image
+`xcode-27-arm64`, version `20261104.0337.1`.
+
+The build job then failed in the Python runtime normalizer fixtures, before
+Swift tests or app compilation. The runner's temporary directory used a
+`/var` alias, while the fixture passed that noncanonical path to a production
+API that deliberately rejects aliased source paths. A local reproduction
+using the equivalent `/tmp` alias produced the same 12 failures and one error
+among 14 tests. The follow-up canonicalizes only the synthetic fixture root;
+15 local tests pass, including a new check that an explicitly symlinked source
+is still rejected before destination creation. Production checks are unchanged.
+The correction requires its own hosted result; the failed run is not a build PASS.
+
+The dated records below describe earlier checkpoints. Their `NOT RUN` claims
+do not override this hosted attempt. Consult the checks on
+[PR #1](https://github.com/pettipol/ups-monitor-macos/pull/1) for later revisions;
+hardware Stop, desktop-widget behavior and sustained monitoring remain separate.
+
+## Previous source review: 2026-11-19
 
 The documented Xcode mismatch is resolved at the image-inventory level.
 The [official image at commit c0f5743a](https://github.com/actions/runner-images/blob/c0f5743aeac97a0d687047af9f309b34c254b261/images/macos/xcode-27-arm64-Readme.md)
@@ -17,7 +43,7 @@ change. The action continues to use Node 24. Review covered the release,
 tag, action inputs and affected Python acquisition source, not the entire
 bundled JavaScript/dependency graph.
 
-The latest recorded public [workflow run](https://github.com/pettipol/ups-monitor-macos/actions/runs/38159191972)
+At that review, the latest recorded public [workflow run](https://github.com/pettipol/ups-monitor-macos/actions/runs/38159191972)
 passed on 2026-10-11 at `b214a72547d43d677c180af4f7b7352a2360623d`.
 It does not exercise the current working tree or updated workflow. Hosted
 provisioning and validation of the intended release revision remain **NOT RUN**.
@@ -100,23 +126,22 @@ the checkout/tool-setup actions, not a personal credential.
 |---|---|
 | actions/checkout | v7.0.1, `3d3c42e5aac5ba805825da76410c181273ba90b1`; [release](https://github.com/actions/checkout/releases/tag/v7.0.1), [action inputs](https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml) |
 | actions/setup-python | v7.1.0, `6d4fd22b20465ccc0f7354476588e8df7c9ca0e0`; [release](https://github.com/actions/setup-python/releases/tag/v7.1.0), [action inputs](https://github.com/actions/setup-python/blob/6d4fd22b20465ccc0f7354476588e8df7c9ca0e0/action.yml), checked 2026-11-19 |
-| Python | 3.15.2; `actions/setup-python` selection configured, remote provisioning `NOT RUN`; no pip dependencies or package cache |
-| Xcode | Local pin: 27.2 build 27B52; `/Applications/Xcode_27.2.app` now maps to 27B52 in the reviewed 2026-11-19 inventory; actual hosted run still required |
-| Swift | Apple Swift 6.4.2 observed locally; Apple lists compiler family 6.4 for Xcode 27.2 |
-| Reader runner | `macos-26`, arm64; runtime assertion checks Darwin/arm64/Python 3.15.2; hosted provisioning and test run `NOT RUN` |
-| Build runner | `xcode-27` arm64; hosted image is public preview, not an immutable image pin |
+| Python | 3.15.2; hosted provisioning and runtime checks passed in run 44923796013; no pip dependencies or package cache |
+| Xcode | 27.2 build 27B52 at `/Applications/Xcode_27.2.app`; hosted exact-version preflight passed in run 44923796013 |
+| Swift | Apple Swift 6.4.2 confirmed by the hosted preflight in run 44923796013 |
+| Reader runner | `macos-26`, arm64; hosted runtime assertion and offline reader suites passed in run 44923796013 |
+| Build runner | `xcode-27` arm64; [generally available since 2026-10-15](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/), not an immutable image pin |
 
 The earlier [official xcode-27 image inventory reviewed on 2026-11-05](https://github.com/actions/runner-images/blob/9329c776c4a38d3dcb31fc78b8180005041c07fb/images/macos/xcode-27-arm64-Readme.md)
 lists `/Applications/Xcode_27.2.app`, but maps it to Xcode 27.2 build 27B48
 (Release Candidate), not Apple's stable 27B52. The build job selects that
 alias explicitly. Its exact preflight requires 27B52 and therefore rejects
 that earlier image before its test suite. The compatible inventory observed
-on 2026-11-19 supersedes that mismatch; hosted execution remains `NOT RUN`.
-The reader job uses `macos-26` and does not require
-Xcode, but its provisioning and run remain `NOT RUN`. The inventories and
-release manifest are configuration/source evidence, not hosted execution; the
-runner images remain mutable. Earlier image observations and runs below are
-historical.
+on 2026-11-19 superseded that mismatch at the source-review level; the November
+21 attempt also passed the hosted exact-version preflight. The reader job uses
+`macos-26` and does not require Xcode. Its hosted suites passed; the separate
+build-job failure is recorded above. Inventories and release manifests alone
+are configuration/source evidence, and runner images remain mutable.
 
 The runner OS/image and Python acquisition infrastructure are not pinned
 byte-for-byte by this YAML. The script prints its detected versions and fails

@@ -28,7 +28,7 @@ def digest(data: bytes) -> str:
 class NormalizerContracts(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="e36-normalizer-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve(strict=True)
         os.chmod(self.root, 0o700)
         self.source = self.root / "source"
         self.source.mkdir(mode=0o700)
@@ -139,6 +139,14 @@ class NormalizerContracts(unittest.TestCase):
         with self.assertRaises(normalizer.NormalizeError) as caught:
             normalizer.copy_normalized_python(self.source, "0" * 64, self.contents)
         self.assertEqual(caught.exception.code, "tree_pin")
+        self.assertFalse((self.contents / "Resources").exists())
+
+    def test_symlink_source_root_rejected_before_destination(self) -> None:
+        linked_source = self.root / "source-link"
+        linked_source.symlink_to(self.source, target_is_directory=True)
+        with self.assertRaises(normalizer.NormalizeError) as caught:
+            normalizer.copy_normalized_python(linked_source, digest(self.control), self.contents)
+        self.assertEqual(caught.exception.code, "source_path")
         self.assertFalse((self.contents / "Resources").exists())
 
     def test_unlisted_file_rejected_before_destination(self) -> None:
