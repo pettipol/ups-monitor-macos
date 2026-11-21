@@ -19,8 +19,9 @@ checks. The product was not launched. Current UI, real Stop, continuity and
 independent installation remain unqualified; no byte-for-byte reproducibility
 claim is made. The signed archive remains private. The runtime-notice manifest field
 `redistribution_review` remains `NOT_PERFORMED`; corresponding-source, license
-and notice review must finish before distribution. CI has not covered the
-later local source changes.
+and notice review must finish before distribution. The earlier hosted run
+predates the first-IO integration. See [CI status](CI.md) for checks on the
+exact revision.
 
 | Artifact reviewed | Contents and SHA-256 |
 |---|---|
