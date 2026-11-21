@@ -30,7 +30,7 @@ def sha(data: bytes) -> str:
 class ExportDeveloperKitTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="developer-kit-test-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve(strict=True)
         self.source_root = "reviewed-project"
         self.source = self.root / "project.tar"
         self.nut = self.root / "nut.tar"

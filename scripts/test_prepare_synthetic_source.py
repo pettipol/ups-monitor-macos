@@ -17,7 +17,7 @@ class PrepareSyntheticSourceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="ups-source-")
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve(strict=True)
         self.base.chmod(0o700)
         self.admitted_temp = self.base / "admitted-temp"
         self.admitted_temp.mkdir(mode=0o700)
@@ -202,6 +202,14 @@ class PrepareSyntheticSourceTests(unittest.TestCase):
         (self.checkout / "linked.txt").symlink_to("tracked.txt")
         with self.assertRaises(subject.PrepareError):
             self.run_prepare()
+
+    def test_rejects_symlink_pin_before_destination(self) -> None:
+        linked_pin = self.base / "derived-pin-link.swift"
+        linked_pin.symlink_to(self.pin_file.name)
+        with self.assertRaisesRegex(subject.PrepareError, "pin_file"):
+            subject.prepare_source(self.checkout, linked_pin, self.manifest,
+                                  self.identifier, self.output)
+        self.assertFalse(self.output.exists())
 
     def test_rejects_enabled_canonical_pin_even_with_nil_comment(self) -> None:
         path = self.checkout / "Sources/UPSRuntime/FrozenOperationalReleasePins.swift"
