@@ -1,11 +1,26 @@
 # Distribution readiness
 
+The optional [first-IO diagnostic source profile](../backend/nut/native-build/first-io-v1/README.md)
+is a later source-only candidate. It keeps the historical delivery identities
+below unchanged. Its patch reconstruction is separate from a native rebuild,
+an assembled package, corresponding-source delivery and distribution review.
+
 **Status: open.** The real app, synthetic app and developer-input kit were
 assembled locally. Each has a different distribution scope. For a real-app
 download, the priority is to prepare the corresponding native source beside
 the binary. Keeping the existing offline kit private is compatible with
 that route. Mirroring the complete kit requires additional work on the third-party
 archives it carries.
+
+The 2026-11-21 first-IO candidate adds scoped local evidence: a fresh native
+build, app/widget packaging with the exact previously checked helper reused,
+local signing, and a same-machine archive restore with four static signature
+checks. The product was not launched. Current UI, real Stop, continuity and
+independent installation remain unqualified; no byte-for-byte reproducibility
+claim is made. The signed archive remains private. The runtime-notice manifest field
+`redistribution_review` remains `NOT_PERFORMED`; corresponding-source, license
+and notice review must finish before distribution. CI has not covered the
+later local source changes.
 
 | Artifact reviewed | Contents and SHA-256 |
 |---|---|

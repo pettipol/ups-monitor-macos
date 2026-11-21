@@ -266,7 +266,8 @@ def _read_helper(root: Path, normalizer: ModuleType, common: ModuleType, deadlin
 
 
 def _prepare(contents: Path, swift_output: Path, expected_native_sha256: str,
-             *, backend_source: Path | None = None, frozen: bool = False) -> dict[str, Any]:
+             *, backend_source: Path | None = None, expected_module_sha256: dict[str, str] | None = None,
+             frozen: bool = False) -> dict[str, Any]:
     started = time.monotonic()
     deadline = started + _MAX_SECONDS
     normalizer = _load_source('candidate_normalizer', _NORMALIZER_PATH)
@@ -321,6 +322,10 @@ def _prepare(contents: Path, swift_output: Path, expected_native_sha256: str,
     for name in sorted(consumer.MODULES):
         raw, identity = _read_regular(modules_root / name, _MAX_MODULE, 'module_source')
         module_raw[name], module_identities[name] = raw, identity
+    if expected_module_sha256 is not None:
+        _need(type(expected_module_sha256) is dict and set(expected_module_sha256) == set(module_raw)
+              and {name: _sha(raw) for name, raw in module_raw.items()} == expected_module_sha256,
+              'stage_module_snapshot')
 
     entries: dict[str, dict[str, Any]] = {
         consumer.PYTHON_ROOT: {'type': 'directory', 'mode': '0755'},
@@ -434,7 +439,7 @@ def _prepare(contents: Path, swift_output: Path, expected_native_sha256: str,
     _need(_sha((contents / consumer.INVENTORY_PATH).read_bytes()) == inventory_hash
           and _sha((contents / consumer.MANIFEST_PATH).read_bytes()) == manifest_hash
           and _sha(swift_output.read_bytes()) == _sha(swift_raw), 'output_changed')
-    return {
+    result = {
         'schema': 1, 'state': ('FROZEN_OPERATIONAL_CANDIDATE_PREPARED_NOT_RELEASED' if frozen
                               else 'BUNDLED_OPERATIONAL_CANDIDATE_PREPARED_NOT_RELEASED'),
         'manifest_sha256': manifest_hash, 'inventory_sha256': inventory_hash,
@@ -445,12 +450,17 @@ def _prepare(contents: Path, swift_output: Path, expected_native_sha256: str,
         'signature_verification': 'NOT_RUN', 'adoption': 'NOT_ADOPTED',
         'elapsed_seconds': round(time.monotonic() - started, 3),
     }
+    return result
 
 
 def prepare_candidate(contents: Path, swift_output: Path, expected_native_sha256: str,
-                      *, frozen: bool = False) -> dict[str, Any]:
+                      *, backend_source: Path | None = None,
+                      expected_module_sha256: dict[str, str] | None = None,
+                      frozen: bool = False) -> dict[str, Any]:
     """Add backend/control files to a new Contents staging tree and emit a Swift pin."""
-    return _prepare(Path(contents), Path(swift_output), expected_native_sha256, frozen=frozen)
+    return _prepare(Path(contents), Path(swift_output), expected_native_sha256,
+                    backend_source=backend_source, expected_module_sha256=expected_module_sha256,
+                    frozen=frozen)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -8,6 +8,7 @@ from enum import Enum
 import hashlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import struct
 import sys
@@ -16,6 +17,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 path = Path(__file__).with_name("build_fresh_hidapi_candidate.py")
@@ -189,6 +191,175 @@ class FreshBuildTests(unittest.TestCase):
         self.assertEqual((work.out / "audit/config.log").read_bytes(), b"diagnostic")
         self.assertEqual((work.out / "generated/include/config.h").read_bytes(), b"configuration")
         self.assertIn("generated/include/nut_version.h", work.receipt["unretained_artifacts"])
+
+    def test_first_io_overlay_changes_only_three_selected_files_and_returns_full_map(self) -> None:
+        source = self.root / "first-io-source"
+        delta_names = ("drivers/apcmicrolink-hidapi-session.h", "drivers/apcmicrolink-hidapi-shared.c",
+                       "drivers/apcmicrolink.c")
+        base = {f"drivers/file-{i:03}.c": fresh.digest(f"base-{i}".encode()) for i in range(7)}
+        base.update({name: fresh.digest(("base-" + name).encode()) for name in delta_names})
+        vendor = {f"vendor-{i}.h": fresh.digest(f"vendor-vendor-{i}.h".encode()) for i in range(8)}
+        for i in range(7):
+            name = f"drivers/file-{i:03}.c"
+            fresh.write_file(source / name, f"base-{i}".encode())
+        for name in delta_names:
+            fresh.write_file(source / name, ("base-" + name).encode())
+        for name, pin in vendor.items():
+            fresh.write_file(source / fresh.VENDOR_016 / name, f"vendor-{name}".encode())
+        overlay_names = delta_names
+        overlay = {name: f"after-{name}".encode() for name in overlay_names}
+        post = dict(base); post.update({name: fresh.digest(raw) for name, raw in overlay.items()})
+        selected = SimpleNamespace(native_base_map=base, native_map=post,
+                                   native_overlay=overlay, vendor_map=vendor)
+        result = fresh.apply_first_io_source_overlay(source, selected, vendor)
+        self.assertEqual(result, post)
+        actual = {name: fresh.digest(fresh.read_file(source / name)) for name in base}
+        self.assertEqual(actual, post)
+        self.assertEqual(sum(base[name] != actual[name] for name in base), 3)
+        self.assertEqual({name: fresh.digest(fresh.read_file(source / fresh.VENDOR_016 / name))
+                          for name in vendor}, vendor)
+
+    def test_first_io_overlay_rejects_vendor_or_base_mismatch_before_overlay(self) -> None:
+        source = self.root / "first-io-source-mismatch"
+        base = {"drivers/file.c": fresh.digest(b"base")}
+        fresh.write_file(source / "drivers/file.c", b"base")
+        selected = SimpleNamespace(native_base_map=base, native_map={"drivers/file.c": fresh.digest(b"after")},
+                                   native_overlay={"drivers/file.c": b"after"}, vendor_map={"vendor.h": "0" * 64})
+        with self.assertRaisesRegex(ValueError, "vendor map mismatch"):
+            fresh.apply_first_io_source_overlay(source, selected, {"vendor.h": "1" * 64})
+        self.assertEqual((source / "drivers/file.c").read_bytes(), b"base")
+
+    def test_compile_audit_uses_selected_closure_for_dependencies_and_both_link_gates(self) -> None:
+        cases = ((False, False), (True, False), (True, True))
+        for use_first_io, change_during_link in cases:
+            with self.subTest(first_io=use_first_io, change_during_link=change_during_link):
+                self.assert_compile_audit_closure(use_first_io, change_during_link)
+
+    def assert_compile_audit_closure(self, use_first_io: bool, change_during_link: bool) -> None:
+        root = self.root / f"mock-native-{use_first_io}-{change_during_link}"
+        source, build, out, sdk = (root / name for name in ("source", "build", "out", "sdk"))
+        clang = root / "toolchain/bin/clang"
+        resource = clang.parent.parent / "lib/clang"
+        resource.mkdir(parents=True)
+        overlay = {name: f"first-io:{name}".encode() for name in (
+            "drivers/apcmicrolink-hidapi-session.h", "drivers/apcmicrolink-hidapi-shared.c",
+            "drivers/apcmicrolink.c",
+        )}
+        project_names = set(overlay) | (set(fresh.UNITS) - {fresh.HID_TU}) | set(fresh.NUT_NOTICE_PATHS)
+        project_names.update(f"drivers/file-{i:03}.c" for i in range(190 - len(project_names)))
+        base = {name: fresh.digest(f"post-016:{name}".encode()) for name in project_names}
+        for name in project_names:
+            fresh.write_file(source / name, f"post-016:{name}".encode())
+        cancel = dict(base)
+        cancel[fresh.NATIVE_ADAPTER] = fresh.digest(b"post-cancel")
+        (source / fresh.NATIVE_ADAPTER).write_bytes(b"post-cancel")
+        vendor = {name: f"vendor:{name}".encode() for name in (
+            "mac/hid.c", "mac/hidapi_darwin.h", "hidapi/hidapi.h", "src/core/hidapi_input_ring.h",
+            "LICENSE.txt", "LICENSE-bsd.txt", "LICENSE-gpl3.txt", "LICENSE-orig.txt",
+        )}
+        vendor_map = {name: fresh.digest(raw) for name, raw in vendor.items()}
+        legacy_map = fresh.stage_vendor(source / fresh.VENDOR_015, {"legacy.h": b"inert old vendor"})
+        generated = {}
+        for name in fresh.GENERATED:
+            raw = f"generated:{name}".encode()
+            fresh.write_file(build / name, raw)
+            generated[name] = fresh.digest(raw)
+        post = dict(base)
+        post.update({name: fresh.digest(raw) for name, raw in overlay.items()})
+        stage_identity = {"profile": "first-io-v1", "source_receipt_sha256": "1" * 64}
+        selection = SimpleNamespace(native_base_map=base, native_map=post, vendor_map=vendor_map,
+                                    native_overlay=overlay, identity=stage_identity)
+        expected_native = post if use_first_io else base
+        expected_pins = {f"source/{name}": pin for name, pin in expected_native.items()}
+        expected_pins.update({f"source/{fresh.VENDOR_016}/{name}": pin for name, pin in vendor_map.items()})
+        expected_pins.update({f"build/{name}": pin for name, pin in generated.items()})
+        self.assertEqual(len(expected_pins), 190 + 8 + 7)
+        events = []
+        product_bytes = b"inert simulated product, never executed"
+
+        def patch(label, _path, _pin):
+            events.append(label)
+            if label == "apply-hidapi-version-gate":
+                target = source / fresh.NATIVE_ADAPTER
+                target.write_bytes(f"post-016:{fresh.NATIVE_ADAPTER}".encode())
+
+        def run(label, _cwd, executable, *arguments):
+            self.assertEqual(executable, str(clang))
+            events.append(label)
+            if label == "clang-resource-dir":
+                return str(resource)
+            if label == "link-dependencies":
+                return "synthetic dependency listing"
+            if label == "compile-link":
+                self.assertEqual(arguments[-1], root / fresh.PRODUCT)
+                fresh.write_file(root / "native.map", b"synthetic link map")
+                fresh.write_file(root / fresh.PRODUCT, product_bytes)
+                if change_during_link:
+                    (source / "drivers/apcmicrolink.c").write_bytes(b"unadmitted edit")
+                return ""
+            self.fail(f"unexpected external phase {label}")
+
+        def dependency_check(deps, work, audit_sdk, pins, clang_resources):
+            self.assertEqual(deps, "synthetic dependency listing")
+            self.assertEqual(work.root, root)
+            self.assertEqual(audit_sdk, sdk)
+            self.assertEqual(clang_resources, resource)
+            self.assertEqual(pins, expected_pins)
+            events.append("dependency-gate")
+            return {}, {}
+
+        original_check = fresh.checked_tree
+
+        def check_tree(tree, pins):
+            if tree == root:
+                self.assertEqual(pins, expected_pins)
+                events.append("post-link-gate" if "compile-link" in events else "pre-link-gate")
+            original_check(tree, pins)
+
+        def audit_product(_work, product):
+            self.assertEqual(product.read_bytes(), product_bytes)
+            self.assertEqual(product.stat().st_mode & 0o777, 0o600)
+            events.append("product-audit")
+            return {"sha256": fresh.digest(product_bytes)}
+
+        receipt = {"source_checkpoints": {}, "legacy_hidapi": legacy_map,
+                   "nut": {"notices": {name: base[name] for name in fresh.NUT_NOTICE_PATHS}}}
+        work = SimpleNamespace(root=root, source=source, build=build, out=out, receipt=receipt,
+                               patch=patch, run=run, tools={"clang": {"path": str(clang)}},
+                               verify_tools=mock.Mock(), cancel=mock.Mock())
+        work.cancel.is_set.return_value = False
+        locks = {"cancel": {"post_write_cancel_sha256": cancel, "patch_sha256": "2" * 64},
+                 "profile": {"post_hidapi_016_sha256": base, "gate_patch_sha256": "3" * 64}}
+        mask = os.umask(0o077)
+        try:
+            with mock.patch.multiple(fresh, checked_tree=check_tree, link_dependencies=dependency_check,
+                                     link_objects=mock.Mock(return_value=[]), audit_product=audit_product):
+                args = (work, self.root / "backend", sdk, locks, {fresh.VENDOR_016: vendor}, generated)
+                if change_during_link:
+                    with self.assertRaisesRegex(ValueError, "source checkpoint mismatch"):
+                        fresh.compile_and_audit(*args, first_io_stage=selection)
+                elif use_first_io:
+                    fresh.compile_and_audit(*args, first_io_stage=selection)
+                else:
+                    fresh.compile_and_audit(*args)
+        finally:
+            os.umask(mask)
+        self.assertEqual(events, ["apply-write-cancel", "apply-hidapi-version-gate", "clang-resource-dir",
+                                  "link-dependencies", "dependency-gate", "pre-link-gate", "compile-link",
+                                  "product-audit", "post-link-gate"])
+        self.assertEqual(receipt["source_checkpoints"]["post_hidapi_016"], base)
+        if use_first_io:
+            self.assertEqual(receipt["source_checkpoints"]["post_first_io"], post)
+            self.assertEqual(receipt["first_io_source_stage"], stage_identity)
+        else:
+            self.assertNotIn("post_first_io", receipt["source_checkpoints"])
+            self.assertNotIn("first_io_source_stage", receipt)
+        if change_during_link:
+            self.assertFalse((out / fresh.PRODUCT).exists())
+            self.assertNotIn("product", receipt)
+        else:
+            self.assertEqual((out / fresh.PRODUCT).read_bytes(), product_bytes)
+            self.assertEqual(receipt["product"]["sha256"], fresh.digest(product_bytes))
 
     def test_failed_supervisor_phase_retains_status_and_does_not_accept(self) -> None:
         for i, state in enumerate((RunState.EXITED, RunState.TIMED_OUT, RunState.OUTPUT_LIMIT, RunState.UNREAPED)):

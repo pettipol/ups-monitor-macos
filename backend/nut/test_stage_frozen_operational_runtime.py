@@ -124,6 +124,106 @@ class StageFrozenOperationalRuntimeTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 'native_identity')
         self.assertFalse(output.exists())
 
+    def test_first_io_output_overlap_rejects_before_helper_scan(self):
+        source_stage = self.root / 'synthetic-source-stage'
+        source_stage.mkdir(mode=0o700)
+        selected = type('Selected', (), {'runtime_root': source_stage / 'runtime',
+            'runtime_map': {}, 'identity': {'profile': 'first-io-v1'}})()
+        validator = type('Validator', (), {'validate_source_stage': staticmethod(
+            lambda _path, _backend: selected)})()
+        original_loader = prepare._load_source
+
+        def loader(name, path):
+            if name == 'first_io_source_stage_validator':
+                return validator
+            return original_loader(name, path)
+
+        with mock.patch.object(stage, '_dependencies', return_value=(prepare, common, normalizer, frozen)), \
+             mock.patch.object(prepare, '_load_source', side_effect=loader), \
+             mock.patch.object(stage, '_scan_helper', side_effect=AssertionError('helper scan must not run')):
+            with self.assertRaises(stage.FrozenStageError) as raised:
+                stage.stage_frozen_runtime(self.helper, self.native, self.native_hash, source_stage,
+                                           first_io_source_stage=source_stage)
+        self.assertEqual(raised.exception.code, 'overlapping_inputs')
+
+    def _first_io_fixture(self, output_name, mutation=None):
+        source_stage = self.root / f'{output_name}-source-stage'
+        source_stage.mkdir(mode=0o700)
+        runtime_root = source_stage / 'runtime'
+        runtime_root.mkdir(mode=0o700)
+        module_map = {}
+        for name in sorted(frozen.MODULES):
+            raw = (stage.HERE / name).read_bytes()
+            if name == 'cleanup_diagnostics.py':
+                raw += b'\n# Distinct synthetic source-stage bytes; never executed.\n'
+            target = runtime_root / name
+            target.write_bytes(raw); target.chmod(0o600)
+            module_map[name] = sha(raw)
+        identity = {'profile': 'first-io-v1', 'source_receipt_sha256': 'a' * 64}
+        selected = type('Selected', (), {'runtime_root': runtime_root,
+            'runtime_map': module_map, 'identity': identity})()
+        def admit(_path, _backend):
+            if mutation == 'before-snapshot':
+                with (runtime_root / 'cleanup_diagnostics.py').open('ab') as stream:
+                    stream.write(b'# Changed after admission.\n')
+            return selected
+
+        validator = type('Validator', (), {'validate_source_stage': staticmethod(admit)})()
+        original_loader = prepare._load_source
+
+        def loader(name, path):
+            if name == 'first_io_source_stage_validator':
+                return validator
+            return original_loader(name, path)
+
+        output = self.root / output_name
+        original_prepare = prepare.prepare_candidate
+
+        def prepare_candidate(contents, swift_pin, expected_native_sha256, **kwargs):
+            result = original_prepare(contents, swift_pin, expected_native_sha256, **kwargs)
+            if mutation == 'result-map':
+                result['module_sha256'] = {'unexpected.py': '0' * 64}
+            elif mutation == 'manifest-map':
+                manifest_path = contents / frozen.MANIFEST_PATH
+                manifest = json.loads(manifest_path.read_bytes())
+                manifest['backend']['module_sha256'] = {'unexpected.py': '0' * 64}
+                manifest_path.write_text(json.dumps(manifest))
+            return result
+
+        with mock.patch.object(stage, '_dependencies', return_value=(prepare, common, normalizer, frozen)), \
+             mock.patch.object(prepare, '_load_source', side_effect=loader), \
+             mock.patch.object(prepare, 'prepare_candidate', side_effect=prepare_candidate):
+            if mutation:
+                with self.assertRaises(stage.FrozenStageError):
+                    stage.stage_frozen_runtime(self.helper, self.native, self.native_hash, output,
+                                               first_io_source_stage=source_stage)
+                if mutation == 'before-snapshot':
+                    self.assertFalse(output.exists(), 'changed admitted modules must fail before output creation')
+                    return
+                receipt = json.loads((output / 'receipt.json').read_bytes())
+                self.assertEqual(receipt['state'], 'STAGING_FAILED_PARTIAL_PRESERVED')
+                self.assertNotIn('first_io_source_stage', receipt)
+                return
+            receipt = stage.stage_frozen_runtime(self.helper, self.native, self.native_hash, output,
+                                                 first_io_source_stage=source_stage)
+        self.assertEqual(receipt['state'], 'STAGED_FROZEN_NOT_EXECUTED')
+        self.assertEqual(receipt['first_io_source_stage'], identity)
+        manifest = json.loads((output / 'stage/Contents' / frozen.MANIFEST_PATH).read_bytes())
+        self.assertEqual(manifest['backend']['module_sha256'], module_map)
+        self.assertEqual(receipt['module_sha256'], module_map)
+        self.assertEqual(len(module_map), 9)
+        self.assertNotEqual(module_map['cleanup_diagnostics.py'], sha((stage.HERE / 'cleanup_diagnostics.py').read_bytes()))
+
+    def test_first_io_frozen_staging_binds_identity_and_exact_manifest_map(self):
+        self._first_io_fixture('first-io-positive')
+
+    def test_first_io_result_or_manifest_map_mismatch_cannot_get_success_receipt(self):
+        self._first_io_fixture('first-io-result-mismatch', 'result-map')
+        self._first_io_fixture('first-io-manifest-mismatch', 'manifest-map')
+
+    def test_first_io_changed_admitted_modules_fail_before_any_output(self):
+        self._first_io_fixture('first-io-snapshot-mismatch', 'before-snapshot')
+
     def test_existing_output_and_sentinel_are_preserved(self):
         output = self.root / 'existing-output'
         output.mkdir(mode=0o700)

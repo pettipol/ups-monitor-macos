@@ -1,5 +1,12 @@
 # Native APC MicroLink build recipe
 
+The optional [first-IO diagnostic source profile](first-io-v1/README.md)
+follows the verified HIDAPI 0.16 checkpoint and the existing qualified runtime
+module map. It reconstructs a separate diagnostic candidate in scratch; it
+does not replace the historical source maps or the host process supervisor.
+Its source-only result is separate from a native build, bundle or hardware
+qualification.
+
 An optional [HIDAPI 0.16 profile](hidapi-0.16/README.md) follows the
 cancellation-boundary candidate. It pins the new vendor layout and final
 source map separately. The 0.15 recipe and recorded result below retain

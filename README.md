@@ -80,7 +80,7 @@ source ZIP/tar links are separate artifacts and do not share that checksum.
 
 The local check on 2026-11-05 covered 723 Python tests across the main and separate reader suites, and 453 distinct Swift tests including the two optional NUT client cases on simulated localhost servers. Swift and Xcode Release builds passed. The Swift compilation resumed after the local process monitor interrupted the first attempt. See the [validation procedure and scope](docs/VALIDATION.md).
 
-The current local validation baseline is macOS with Xcode 27.2 build `27B52`, Apple Swift 6.4.2 and Python 3.15.2. Its full synthetic validation and ad-hoc Release build passed on 2026-11-04 on a frozen 503-file source copy: 640 Python tests and 447 Swift tests passed, with two optional NUT-client tests skipped. This is local build/test evidence, not an app release, hosted CI result, runtime continuity proof or hardware qualification. On 2026-11-04 the hosted image inventory mapped the Xcode 27.2 alias to RC build `27B48`. The exact-version check requires the stable build. A hosted run on these sources remains open. See the [dated current result](docs/LOCAL_VALIDATION_2026-11-04.md) and [validation status](docs/VALIDATION.md). The 2026-10-29 Xcode 27.1/Swift 6.4 result remains historical; the Swift package declares macOS 14+, but that deployment setting is not evidence of runtime support on macOS 14. See [managed native validation](docs/MANAGED_NATIVE_RUNTIME.md) and [CI status](docs/CI.md).
+The hosted [CI run 44925373618](https://github.com/pettipol/ups-monitor-macos/actions/runs/44925373618) completed both jobs successfully on 2026-11-21 for tree `806bc3a949a012453559a33e53b681b8dbeb3b8a`. [PR #1](https://github.com/pettipol/ups-monitor-macos/pull/1) was a draft at that checkpoint. The run counted 739 Python tests (667 in the source/tests/ad-hoc-build job and 72 reader contracts) and 453 passing Swift test definitions (296 XCTest and 157 Swift Testing), with two optional `upsc` XCTest cases skipped. The app completed an ad-hoc build. This dated result covers that tree only: it does not cover later local changes, hardware, UI/widget behavior, continuity or release. See [CI status](docs/CI.md), the [validation scope](docs/VALIDATION.md) and the historical [2026-11-04 local baseline](docs/LOCAL_VALIDATION_2026-11-04.md).
 
 A separate complete synthetic package composition used a frozen 504-file source
 tree (5,787,739 bytes) and completed 25 bounded commands in 57.314 seconds.
@@ -91,6 +91,15 @@ accessed. These checks did not repeat the test suites or qualify runtime,
 reproducibility, distribution or third-party redistribution. See the
 [packaging result](docs/LOCAL_VALIDATION_2026-11-04.md#packaging-2026-11-04-e61)
 and [build recipe](docs/FROZEN_BUILD_RECIPE.md).
+
+The 2026-11-21 first-IO candidate completed a fresh offline native build and
+local app/widget packaging with local signing. Static checks passed, including
+a same-machine archive restore with four signature verifications. The helper was reused from
+the previously checked candidate; the native reader was freshly built. The
+product was not launched. Current UI, Stop behavior, continuity, independent
+installation, byte-for-byte reproducibility and redistribution are not
+qualified. See [validation](docs/VALIDATION.md) and
+[distribution readiness](docs/DISTRIBUTION_READINESS.md).
 
 ```sh
 git clone https://github.com/pettipol/ups-monitor-macos.git

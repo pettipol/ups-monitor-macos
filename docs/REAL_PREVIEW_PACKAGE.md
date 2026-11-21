@@ -7,12 +7,32 @@ work with the UPS disconnected. The canonical Swift manifest pins stay nil.
 Choose the native source profile explicitly. `NATIVE_PROFILE=hidapi-0.15`
 uses the historical recipe below. `NATIVE_PROFILE=hidapi-0.16` uses the
 [fresh-build procedure](../backend/nut/native-build/hidapi-0.16/README.md)
-and the profile-specific notice index. Both routes produce a new local
+and the profile-specific notice index. `NATIVE_PROFILE=first-io-v1` adds the
+explicit [first-IO source stage](../backend/nut/native-build/first-io-v1/README.md)
+to that fresh build and selects its matching nine qualified runtime modules.
+All routes produce a new local
 candidate; neither reproduces the identity or qualification of E89. In
 particular, E89 used a separately reviewed runtime variant that requested
 cancellation after 90 seconds. That variant is not implied by selecting a
 native profile here. Record the exact helper and runtime sources, limits
 and validation for any new candidate before a separate execution trial.
+
+For `first-io-v1`, first prepare the source-only stage using that profile's
+recipe. Set `FIRST_IO_SOURCE_STAGE` to its canonical absolute root containing
+`source/`, `runtime/` and `SOURCE_RECEIPT.json`. Pass
+`--first-io-source-stage "$FIRST_IO_SOURCE_STAGE"` to the fresh native builder
+and the frozen stager below. Both tools authenticate the complete stage bytes;
+the source receipt alone is insufficient. The native build still configures
+and builds its own seven generated inputs, then applies only the three admitted
+source replacements before the pinned link audit. The runtime selection includes
+the existing 90-second cancellation request; it does not guarantee a kernel
+deadline or establish hardware compatibility.
+
+Export a new reviewed HIDAPI 0.16 developer kit containing the updated builder,
+stage validator and profile files. The builder must match its own copy in the
+kit; an older kit with a different runner is rejected. Keep the existing kit
+format and source provenance. This option changes neither the canonical runtime
+modules nor the historical build profiles.
 
 1. Run the **Resolve and validate the installed Apple toolchain** preflight in
    [FROZEN_BUILD_RECIPE.md](FROZEN_BUILD_RECIPE.md). It exports the selected
@@ -42,7 +62,7 @@ and validation for any new candidate before a separate execution trial.
    for the ordered build phases. Its deadline and 1 MiB output cap apply to
    captured streams, not direct file writes by tools.
 
-   For the fresh 0.16 route, set `FRESH_NATIVE_ROOT` to the canonical absolute
+   For either fresh route, set `FRESH_NATIVE_ROOT` to the canonical absolute
    output directory. Record `NATIVE_RECEIPT_SHA256` with the completed build
    and reviewed static-audit results, then supply that recorded value here.
    Keep this build directory exclusively owned and unmodified throughout
@@ -53,13 +73,14 @@ and validation for any new candidate before a separate execution trial.
 
    ```sh
    set -eu
-   NATIVE_PROFILE=hidapi-0.16
+   : "${NATIVE_PROFILE:=hidapi-0.16}"
    : "${FRESH_NATIVE_ROOT:?set the reviewed fresh-build output directory}" \
      "${NATIVE_RECEIPT_SHA256:?supply the receipt digest recorded after the build audit}" \
      "${HOST_PYTHON:?set the trusted host Python 3.15.2}"
    NATIVE_PRODUCT_SHA256="$("$HOST_PYTHON" -I -S -B - \
-     "$FRESH_NATIVE_ROOT" "$NATIVE_RECEIPT_SHA256" <<'PYTHON'
-   import hashlib, json, os, re, stat, sys
+     "$FRESH_NATIVE_ROOT" "$NATIVE_RECEIPT_SHA256" "$NATIVE_PROFILE" \
+     "${FIRST_IO_SOURCE_STAGE:-}" "$CHECKOUT_ROOT" <<'PYTHON'
+   import hashlib, importlib.util, json, os, re, stat, sys
    from pathlib import Path
 
    root, expected = Path(sys.argv[1]), sys.argv[2]
@@ -76,6 +97,20 @@ and validation for any new candidate before a separate execution trial.
    if len(raw) != info.st_size or hashlib.sha256(raw).hexdigest() != expected:
        raise SystemExit('Fresh-build receipt changed')
    receipt = json.loads(raw)
+   profile, stage_path, checkout = sys.argv[3], sys.argv[4], Path(sys.argv[5])
+   if profile == 'first-io-v1':
+       validator_path = checkout / 'backend/nut/first_io_source_stage.py'
+       spec = importlib.util.spec_from_file_location('first_io_package_gate', validator_path)
+       validator = importlib.util.module_from_spec(spec)
+       sys.modules[spec.name] = validator
+       spec.loader.exec_module(validator)
+       selected = validator.validate_source_stage(Path(stage_path), validator_path.parent)
+       if (receipt.get('first_io_source_stage') != selected.identity
+               or receipt.get('source_checkpoints', {}).get('post_first_io') != selected.native_map):
+           raise SystemExit('Native build does not match the selected first-IO stage')
+   elif (profile != 'hidapi-0.16' or 'first_io_source_stage' in receipt
+         or 'post_first_io' in receipt.get('source_checkpoints', {})):
+       raise SystemExit('Wrong native profile for the fresh-build receipt')
    product = receipt.get('product', {})
    hidapi = receipt.get('hidapi', {})
    if (type(receipt.get('schema')) is not int or receipt['schema'] != 1
@@ -142,10 +177,15 @@ and validation for any new candidate before a separate execution trial.
    CANDIDATE_ROOT="$BUILD_ROOT/real-frozen-candidate"
    test -d "$HELPER_APP"
    test ! -e "$CANDIDATE_ROOT"
+   set --
+   if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+     : "${FIRST_IO_SOURCE_STAGE:?set the admitted first-IO source stage}"
+     set -- --first-io-source-stage "$FIRST_IO_SOURCE_STAGE"
+   fi
    "$HOST_PYTHON" -I -S -B \
      "$CHECKOUT_ROOT/backend/nut/stage_frozen_operational_runtime.py" \
      --helper-app "$HELPER_APP" --native-producer "$NATIVE_PRODUCER" \
-     --native-sha256 "$NATIVE_SHA256" --output-root "$CANDIDATE_ROOT" \
+     --native-sha256 "$NATIVE_SHA256" --output-root "$CANDIDATE_ROOT" "$@" \
      > "$BUILD_ROOT/real-stage-result.json"
    MANIFEST_SHA256="$("$HOST_PYTHON" -I -S -B -c \
      'import json,sys; print(json.load(open(sys.argv[1]))["manifest_sha256"])' \
@@ -153,6 +193,68 @@ and validation for any new candidate before a separate execution trial.
    case "$MANIFEST_SHA256" in *[!0-9a-f]*|'') exit 1;; esac
    test "${#MANIFEST_SHA256}" -eq 64
    ```
+
+   For `first-io-v1`, run this pairing check before step 4. It rebinds the
+   recorded native build receipt, the selected source stage, the frozen-stage
+   receipt and its actual manifest. The native product digest checked before
+   signing in step 2 and the signed-copy digest remain distinct. Retain both.
+   This check does not replace the static build audit or code-signature checks.
+
+   ```sh
+   if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+     "$HOST_PYTHON" -I -S -B - "$CHECKOUT_ROOT" "$FIRST_IO_SOURCE_STAGE" \
+       "$FRESH_NATIVE_ROOT" "$NATIVE_RECEIPT_SHA256" "$CANDIDATE_ROOT" \
+       "$NATIVE_SHA256" "$MANIFEST_SHA256" <<'PYTHON'
+   import hashlib, importlib.util, json, os, re, stat, sys
+   from pathlib import Path
+
+   checkout, source, native, expected, candidate, signed_pin, manifest_pin = sys.argv[1:]
+   path = Path(checkout) / 'backend/nut/first_io_source_stage.py'
+   spec = importlib.util.spec_from_file_location('first_io_pairing_gate', path)
+   validator = importlib.util.module_from_spec(spec)
+   sys.modules[spec.name] = validator
+   spec.loader.exec_module(validator)
+   selected = validator.validate_source_stage(Path(source), path.parent)
+
+   def control(path, pin=None):
+       if pin is not None and re.fullmatch(r'[0-9a-f]{64}', pin) is None:
+           raise SystemExit('Invalid recorded pairing digest')
+       if not path.is_absolute() or path.resolve(strict=True) != path:
+           raise SystemExit('Noncanonical pairing input')
+       fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+       with os.fdopen(fd, 'rb') as stream:
+           info = os.fstat(stream.fileno())
+           if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4 * 1048576:
+               raise SystemExit('Invalid pairing control file')
+           raw = stream.read(4 * 1048576 + 1)
+       if len(raw) != info.st_size or (pin is not None and hashlib.sha256(raw).hexdigest() != pin):
+           raise SystemExit('Pairing input changed')
+       return json.loads(raw)
+
+   built = control(Path(native) / 'BUILD_RECEIPT.json', expected)
+   staged = control(Path(candidate) / 'receipt.json')
+   manifest = control(Path(candidate) / 'stage/Contents/Resources/ManagedOperationalRuntime/frozen-runtime-bundle.json', manifest_pin)
+   if (built.get('state') != 'COMPILED_STATIC_AUDIT_ONLY'
+           or built.get('first_io_source_stage') != selected.identity
+           or built.get('source_checkpoints', {}).get('post_first_io') != selected.native_map
+           or staged.get('state') != 'STAGED_FROZEN_NOT_EXECUTED'
+           or staged.get('first_io_source_stage') != selected.identity
+           or staged.get('module_sha256') != selected.runtime_map
+           or staged.get('manifest_sha256') != manifest_pin
+           or staged.get('native_sha256') != signed_pin
+           or manifest.get('backend', {}).get('module_sha256') != selected.runtime_map
+           or manifest.get('native', {}).get('sha256') != signed_pin):
+       raise SystemExit('Native/runtime profile pairing mismatch')
+   print('FIRST_IO_PAIRING_PASS')
+   PYTHON
+   fi
+   ```
+
+   Do not also apply the historical bounded-backend recipe to this stage.
+   Its admitted runtime already contains that qualification patch and the
+   two first-IO changes. Retain the original HIDAPI 0.16 notice files and the
+   separate [first-IO notice](../backend/nut/native-build/first-io-v1/NOTICE.md).
+   Review corresponding-source and modified-file notices before distribution.
 
 4. Prepare a private source copy with the exact real identifier assigned to this
    preview. It must be a distinct reverse-DNS identifier ending in `.real` and
@@ -231,12 +333,16 @@ and validation for any new candidate before a separate execution trial.
        NATIVE_NOTICE_TEXT="$RECIPE/licenses/native-notices.txt"
        NATIVE_NOTICE_MANIFEST="$RECIPE/licenses/native-producer.sha256"
        ;;
-     hidapi-0.16)
+     hidapi-0.16|first-io-v1)
        : "${FRESH_NATIVE_ROOT:?set the reviewed fresh-build output directory}"
        NUT_NOTICE_SOURCE="$FRESH_NATIVE_ROOT/upstream-notices/nut"
        HIDAPI_NOTICE_SOURCE="$FRESH_NATIVE_ROOT/upstream-notices/hidapi"
        NATIVE_NOTICE_TEXT="$RECIPE/hidapi-0.16/native-notices.txt"
        NATIVE_NOTICE_MANIFEST="$RECIPE/hidapi-0.16/native-producer.sha256"
+       if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+         FIRST_IO_NOTICE_SOURCE="$RECIPE/first-io-v1/NOTICE.md"
+         FIRST_IO_NOTICE_SHA256=2c9eed60624d6b5108766c090aa9d210be3689e6b63846f98c0f66fa457e0262
+       fi
        ;;
      *) printf '%s\n' 'Unsupported native source profile' >&2; exit 1 ;;
    esac
@@ -249,6 +355,9 @@ and validation for any new candidate before a separate execution trial.
    do
      test ! -e "$APP/Contents/$path"
    done
+   if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+     test ! -e "$APP/Contents/Resources/FirstIOProfileNotices"
+   fi
    "$HOST_PYTHON" -I -S -B \
      "$CHECKOUT_ROOT/backend/nut/assemble_frozen_operational_runtime.py" \
      --runtime-contents "$CANDIDATE_ROOT/stage/Contents" \
@@ -264,6 +373,15 @@ and validation for any new candidate before a separate execution trial.
      cp "$HIDAPI_NOTICE_SOURCE/$name" "$NOTICE_DIR/$name"
    done
    cp "$NATIVE_NOTICE_TEXT" "$NOTICE_DIR/README.txt"
+   if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+     FIRST_IO_NOTICE_DIR="$APP/Contents/Resources/FirstIOProfileNotices"
+     mkdir "$FIRST_IO_NOTICE_DIR"
+     cp "$FIRST_IO_NOTICE_SOURCE" "$FIRST_IO_NOTICE_DIR/NOTICE.md"
+     chmod 0644 "$FIRST_IO_NOTICE_DIR/NOTICE.md"
+     printf '%s  %s\n' "$FIRST_IO_NOTICE_SHA256" "$FIRST_IO_NOTICE_DIR/NOTICE.md" \
+       | /usr/bin/shasum -a 256 -c -
+     test "$(stat -f '%Lp' "$FIRST_IO_NOTICE_DIR/NOTICE.md")" = 644
+   fi
    ```
 
 7. Verify the eight regular files against `NATIVE_NOTICE_MANIFEST`, selected
@@ -271,6 +389,12 @@ and validation for any new candidate before a separate execution trial.
    or the [0.16 notice checksums](../backend/nut/native-build/hidapi-0.16/native-producer.sha256).
    They cover the three NUT texts at the pinned revision, the four HIDAPI texts and the native README.
    Use a private build directory, with absolute paths for `APP`, `RECIPE` and `HOST_PYTHON`.
+   For `first-io-v1`, the separate profile notice is copied to
+   `Contents/Resources/FirstIOProfileNotices/NOTICE.md` and checked against the
+   source notice pin. It is intentionally outside the eight-file native notice
+   manifest and the 25-file runtime notice set. This extra file is checked
+   before outer signing; repeat its hash and mode check after signing as part of
+   the final app inventory.
    Keep the assembler's separate runtime notices. Its JSON receipt records the current helper
    executable and the historical executable used for the notice inventory. A different digest
    calls for inspection of this build's embedded modules, runtime hooks and libraries. A matching
@@ -309,6 +433,14 @@ and validation for any new candidate before a separate execution trial.
    "$CODESIGN" --verify --strict --verbose=2 \
      "$APP/Contents/MacOS/apcmicrolink-hidapi-operational"
    verify_native_notices || exit 1
+   if test "${NATIVE_PROFILE:-hidapi-0.15}" = first-io-v1; then
+     test ! -L "$APP/Contents/Resources/FirstIOProfileNotices" || exit 1
+     test ! -L "$APP/Contents/Resources/FirstIOProfileNotices/NOTICE.md" || exit 1
+     printf '%s  %s\n' "$FIRST_IO_NOTICE_SHA256" \
+       "$APP/Contents/Resources/FirstIOProfileNotices/NOTICE.md" \
+       | /usr/bin/shasum -a 256 -c -
+     test "$(stat -f '%Lp' "$APP/Contents/Resources/FirstIOProfileNotices/NOTICE.md")" = 644
+   fi
    ```
 
    After outer signing, repeat closure, embedded-pin, helper/native and

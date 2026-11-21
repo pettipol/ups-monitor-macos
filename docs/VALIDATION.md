@@ -1,5 +1,21 @@
 # Local Validation
 
+## First-IO local packaging (2026-11-21)
+
+The private build and packaging records document one fresh offline native
+build, followed by locally signed app/widget packaging with the previously
+verified helper reused unchanged. The package used the first-IO runtime profile.
+Static audit passed;
+the product, helper and reader were not executed. A same-machine archive
+round-trip restored the expected entries and two relative links, and all four
+static signature checks passed again. This confirms archive integrity for that
+local candidate only. It does not qualify current UI or widget rendering,
+normal Stop, continuity, independent installation, hardware, release or
+byte-for-byte reproducibility. No new dependencies or latest-version claims
+were introduced. The hosted CI result documented below predates these local source changes
+and does not cover them. See [distribution readiness](DISTRIBUTION_READINESS.md)
+and the [fresh-build packaging recipe](REAL_PREVIEW_PACKAGE.md).
+
 The [November 19 candidate check](LOCAL_VALIDATION_2026-11-19.md) records E89
 packaging, native-source reconstruction and the H14 controller simulation.
 Its scope is separate from the full historical suite results below; real Stop,
@@ -25,8 +41,16 @@ that fails before checkout if the reader job did not succeed. Workflow
 cancellation cancels the dependent job. The build job then runs the synthetic
 preflight harness and `scripts/check.sh`; the latter performs the real pinned
 Xcode/Swift/Python preflight before its test and build sequence. A reader PASS
-alone is never build PASS. Runner provisioning and hosted execution are
-`NOT RUN`; see [CI status](CI.md).
+alone is never build PASS. Hosted run
+[44925373618](https://github.com/pettipol/ups-monitor-macos/actions/runs/44925373618)
+passed both jobs on 2026-11-21 for tree
+`806bc3a949a012453559a33e53b681b8dbeb3b8a`: 739 Python tests (667 in the
+source/tests/ad-hoc-build job and 72 reader contracts), 453 passing Swift test
+definitions (296 XCTest and 157 Swift Testing), two optional `upsc` XCTest
+skips, and a successful ad-hoc Xcode app build. This dated run covers that tree
+only; it does not include later local E119 changes or private E116/E117
+evidence, and does not qualify hardware, UI/widget behavior, continuity or
+release. See [CI status](CI.md).
 
 On 2026-11-05 the 523 source files from the E76 developer kit were checked
 locally with the pinned toolchain. The ordinary preflight and 651 Python
@@ -51,7 +75,8 @@ configured local check, including Swift and Xcode Release builds, passed on
 passed, with two optional NUT-client tests skipped. See the [dated result and
 limits](LOCAL_VALIDATION_2026-11-04.md). The 2026-10-29 result remains a separate
 historical baseline; see [its dated record](LOCAL_VALIDATION_2026-10-29.md).
-Hosted CI for the refreshed baseline is still `HOLD`; see [CI status](CI.md).
+Hosted run 44925373618 subsequently passed on its recorded source tree; it does
+not qualify later local changes. See [CI status](CI.md).
 The check includes bundled and frozen runtime contracts, but does not execute
 the assembled frozen app or qualify its GUI, hardware or distribution. The
 script does not install or download tools.
@@ -60,8 +85,7 @@ A separate 2026-11-04 synthetic SharedRelease package composition completed
 25 bounded commands in 57.314 seconds on 504 frozen source files
 (5,787,739 bytes). It passed static closure and signature checks without
 launching a product or repeating these tests. See the [dated packaging record](LOCAL_VALIDATION_2026-11-04.md#packaging-2026-11-04-e61);
-this does not change hosted CI's **HOLD** status or establish runtime,
-reproducibility or distribution qualification.
+this does not establish runtime, reproducibility or distribution qualification.
 
 `bash scripts/test_check_preflight.sh` separately exercises version parsing and
 early rejection with synthetic command stubs. It covers both supported Swift

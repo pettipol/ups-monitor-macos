@@ -130,6 +130,22 @@ class CandidatePackagerTests(unittest.TestCase):
         self.assertFalse((root / CONSUMER.BACKEND_ROOT).exists())
         self.assertFalse(pin.exists())
 
+    def test_first_io_module_snapshot_mismatch_fails_before_controls_or_pin(self):
+        root, native = self.contents('first-io-module-mismatch')
+        expected = {name: hashlib.sha256((self.modules / name).read_bytes()).hexdigest()
+                    for name in CONSUMER.MODULES}
+        changed = sorted(expected)[0]
+        (self.modules / changed).write_bytes(b'mutated after authenticated snapshot')
+        pin = self.root / 'first-io-module-mismatch' / 'Pins.swift'
+        with self.assertRaises(PACKAGER.CandidateError) as raised:
+            PACKAGER._prepare(root, pin, hashlib.sha256(native.read_bytes()).hexdigest(),
+                backend_source=self.modules, expected_module_sha256=expected)
+        self.assertEqual(raised.exception.code, 'stage_module_snapshot')
+        self.assertFalse((root / CONSUMER.BACKEND_ROOT).exists())
+        self.assertFalse((root / CONSUMER.MANIFEST_PATH).exists())
+        self.assertFalse((root / CONSUMER.INVENTORY_PATH).exists())
+        self.assertFalse(pin.exists())
+
     def test_extra_module_and_mutated_module_are_rejected_by_public_consumer(self):
         root, pin, result = self.prepare('mutations')
         extra = root / CONSUMER.BACKEND_ROOT / 'unlisted.py'

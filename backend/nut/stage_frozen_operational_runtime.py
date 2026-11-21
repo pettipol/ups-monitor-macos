@@ -276,7 +276,7 @@ def _write_receipt(root: Path, value: dict[str, Any]) -> None:
 
 
 def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256: str,
-                         output_root: Path) -> dict[str, Any]:
+                         output_root: Path, *, first_io_source_stage: Path | None = None) -> dict[str, Any]:
     """Copy and validate a frozen helper candidate; never execute or sign inputs."""
     helper_app, native_producer, output_root = map(Path, (helper_app, native_producer, output_root))
     deadline = time.monotonic() + MAX_SECONDS
@@ -285,6 +285,24 @@ def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256:
     helper_fd = None
     try:
         _need(type(native_sha256) is str and common._hash(native_sha256), 'native_identity')
+        selected = None
+        backend_source = None
+        expected_modules = None
+        if first_io_source_stage is not None:
+            validator = prepare._load_source('first_io_source_stage_validator',
+                                             HERE / 'first_io_source_stage.py')
+            try:
+                selected = validator.validate_source_stage(Path(first_io_source_stage), HERE)
+            except Exception as error:
+                raise FrozenStageError('first_io_source_stage') from error
+            backend_source = selected.runtime_root
+            expected_modules = selected.runtime_map
+            output_candidate = Path(output_root)
+            _need(output_candidate.is_absolute() and '..' not in output_candidate.parts,
+                  'output_path')
+            stage_root = Path(first_io_source_stage).resolve(strict=True)
+            _need(output_candidate != stage_root and output_candidate not in stage_root.parents
+                  and stage_root not in output_candidate.parents, 'overlapping_inputs')
         _canonical_input(helper_app, HELPER_NAME, prepare)
         helper_fd, helper_rows, helper_ids, helper_root_id, helper_bytes = _scan_helper(
             helper_app, normalizer, common, prepare, deadline)
@@ -293,9 +311,13 @@ def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256:
         module_hashes = {}
         module_snapshots = {}
         for name in sorted(frozen.MODULES):
-            raw, identity = prepare._read_regular(prepare._HERE / name, prepare._MAX_MODULE, 'module_source')
+            source_root = backend_source or prepare._HERE
+            raw, identity = prepare._read_regular(source_root / name, prepare._MAX_MODULE, 'module_source')
             module_hashes[name] = _sha(raw)
             module_snapshots[name] = (raw, identity)
+        if expected_modules is not None:
+            _need(set(expected_modules) == set(module_hashes) and module_hashes == expected_modules,
+                  'stage_module_snapshot')
         inputs_raw, _inputs_identity = prepare._read_regular(prepare._INPUTS_PATH, 65536, 'upstream_inputs')
         _need(_sha(inputs_raw) == prepare._INPUTS_SHA256, 'upstream_inputs')
         _need(output_root.is_absolute() and '..' not in output_root.parts
@@ -356,7 +378,22 @@ def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256:
         swift_pin = output_root / 'derived' / 'FrozenOperationalReleasePins.swift'
         _need(time.monotonic() < deadline, 'deadline')
         _check_output_root(output_root, root_identity)
-        result = prepare.prepare_candidate(contents, swift_pin, native_sha256, frozen=True)
+        if selected is None:
+            result = prepare.prepare_candidate(contents, swift_pin, native_sha256, frozen=True)
+        else:
+            result = prepare.prepare_candidate(contents, swift_pin, native_sha256, frozen=True,
+                backend_source=backend_source, expected_module_sha256=expected_modules)
+            _need(type(result) is dict and result.get('module_sha256') == expected_modules == module_hashes,
+                  'stage_packager_module_map')
+            try:
+                manifest_raw, _ = prepare._read_regular(contents / frozen.MANIFEST_PATH, 32768,
+                                                         'stage_manifest_identity')
+                _need(_sha(manifest_raw) == result.get('manifest_sha256'), 'stage_manifest_identity')
+                manifest = json.loads(manifest_raw)
+                manifest_modules = manifest['backend']['module_sha256']
+            except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+                raise FrozenStageError('stage_manifest_module_map') from error
+            _need(manifest_modules == expected_modules, 'stage_manifest_module_map')
         _need(time.monotonic() < deadline, 'deadline')
         _check_output_root(output_root, root_identity)
         _verify_copied_helper(copied_helper_root, helper_rows, prepare, normalizer, common, deadline)
@@ -369,7 +406,7 @@ def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256:
         current_native, current_native_id = _read_native(native_producer, native_sha256, prepare)
         _need(current_native == native_raw and current_native_id == native_id, 'native_changed')
         for name, (expected_raw, expected_identity) in module_snapshots.items():
-            current, current_identity = prepare._read_regular(prepare._HERE / name, prepare._MAX_MODULE,
+            current, current_identity = prepare._read_regular((backend_source or prepare._HERE) / name, prepare._MAX_MODULE,
                                                                'module_changed')
             _need(current == expected_raw and current_identity == expected_identity, 'module_changed')
         _need(time.monotonic() < deadline, 'deadline')
@@ -390,6 +427,9 @@ def stage_frozen_runtime(helper_app: Path, native_producer: Path, native_sha256:
             'runtime_execution': 'NOT_RUN', 'adoption': 'NOT_ADOPTED',
             'elapsed_seconds': round(time.monotonic() - (deadline - MAX_SECONDS), 3),
         }
+        if selected is not None:
+            receipt['first_io_source_stage'] = selected.identity
+            receipt['module_sha256'] = module_hashes
         _write_receipt(output_root, receipt)
         return receipt
     except BaseException as error:
@@ -417,10 +457,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--native-producer', type=Path, required=True)
     parser.add_argument('--native-sha256', required=True)
     parser.add_argument('--output-root', type=Path, required=True)
+    parser.add_argument('--first-io-source-stage', type=Path,
+                        help='authenticate and select the E119 qualified runtime modules')
     args = parser.parse_args(argv)
     try:
-        result = stage_frozen_runtime(args.helper_app, args.native_producer,
-                                      args.native_sha256, args.output_root)
+        if args.first_io_source_stage is None:
+            result = stage_frozen_runtime(args.helper_app, args.native_producer,
+                                          args.native_sha256, args.output_root)
+        else:
+            result = stage_frozen_runtime(args.helper_app, args.native_producer,
+                                          args.native_sha256, args.output_root,
+                                          first_io_source_stage=args.first_io_source_stage)
     except (OSError, ValueError) as error:
         code = getattr(error, 'code', 'stage_failed')
         print(json.dumps({'state': 'REJECTED', 'code': code}, sort_keys=True), file=sys.stderr)

@@ -164,6 +164,9 @@ printf '\n== Managed native runtime tests ==\n'
 "$PYTHON_BIN" -I -S -B backend/nut/test_prepare_bundled_operational_candidate.py -v
 "$PYTHON_BIN" -I -S -B backend/nut/test_stage_frozen_operational_runtime.py -v
 "$PYTHON_BIN" -I -S -B backend/nut/test_assemble_frozen_operational_runtime.py -v
+"$PYTHON_BIN" -I -S -B backend/nut/test_build_fresh_hidapi_candidate.py -v
+"$PYTHON_BIN" -I -S -B backend/nut/test_first_io_source_stage.py -v
+"$PYTHON_BIN" -I -S -B backend/nut/test_first_io_package_recipe.py -v
 "$PYTHON_BIN" -I -S -B -m unittest discover -s scripts -p 'test_prepare_synthetic_source.py' -v
 "$PYTHON_BIN" -I -S -B -m unittest discover -s scripts -p 'test_export_developer_kit.py' -v
 printf '\n== Bounded stream dispatch tests ==\n'

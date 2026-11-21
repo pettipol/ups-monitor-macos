@@ -44,6 +44,17 @@ and the characters `/`, `_`, `.`, `+`, `@` and `-`.
   --autotools-bin "$AUTOTOOLS_BIN" --output-dir "$OUTPUT_DIR"
 ```
 
+For the optional first-IO diagnostic candidate, first prepare and retain the
+[verified source stage](../first-io-v1/README.md), then add
+`--first-io-source-stage "$FIRST_IO_SOURCE_STAGE"` to this command. Export a
+new reviewed kit containing the updated builder and validator: the running
+builder must still match its archived copy. The option authenticates all 207
+stage files before tool setup, overlays only the three selected native files
+after the ordinary 0.16 source gate, and records the selected source identity.
+Keep the same stage for the matching runtime and follow the
+[package pairing checks](../../../../docs/REAL_PREVIEW_PACKAGE.md).
+Without this option, the existing 0.16 path and source map remain unchanged.
+
 The script reconstructs the 190-file NUT checkpoint, applies CAL and stages
 HIDAPI 0.15.0 to configure and build two headers and five archives. It checks
 the source and generated HIDAPI configure probe for compile-and-link behavior.

@@ -708,6 +708,21 @@ def stage_vendor(root: Path, files: dict[str, bytes]) -> dict[str, str]:
     return pins
 
 
+def apply_first_io_source_overlay(source: Path, selected, vendor_map: dict[str, str]) -> dict[str, str]:
+    """Apply authenticated E119 bytes over the exact post-0.16 source map."""
+    checked_tree(source, selected.native_base_map)
+    require(vendor_map == selected.vendor_map, "first-IO vendor map mismatch")
+    require(set(selected.native_overlay) == {
+        "drivers/apcmicrolink-hidapi-session.h", "drivers/apcmicrolink-hidapi-shared.c",
+        "drivers/apcmicrolink.c"}, "first-IO overlay key set mismatch")
+    for name, raw in selected.native_overlay.items():
+        target = source / path_name(name)
+        target.write_bytes(raw)
+        target.chmod(0o600)
+    checked_tree(source, selected.native_map)
+    return dict(selected.native_map)
+
+
 def bootstrap(work: Build, backend: Path, nut: Path, locks: dict, vendors: dict) -> dict[str, str]:
     source, build, root = work.source, work.build, work.root
     recipe = backend / "native-build"
@@ -779,7 +794,7 @@ def bootstrap(work: Build, backend: Path, nut: Path, locks: dict, vendors: dict)
 
 
 def compile_and_audit(work: Build, backend: Path, sdk: Path, locks: dict,
-                      vendors: dict, generated: dict[str, str]) -> None:
+                      vendors: dict, generated: dict[str, str], first_io_stage=None) -> None:
     source, build, root = work.source, work.build, work.root
     recipe = backend / "native-build"
     cancel, profile = locks["cancel"]["post_write_cancel_sha256"], locks["profile"]["post_hidapi_016_sha256"]
@@ -790,6 +805,10 @@ def compile_and_audit(work: Build, backend: Path, sdk: Path, locks: dict,
     new_vendor = stage_vendor(source / VENDOR_016, vendors[VENDOR_016])
     checked_tree(source / VENDOR_015, work.receipt["legacy_hidapi"])
     shutil.rmtree(source / VENDOR_015)
+    if first_io_stage is not None:
+        post_first_io = apply_first_io_source_overlay(source, first_io_stage, new_vendor)
+        work.receipt["source_checkpoints"]["post_first_io"] = post_first_io
+        work.receipt["first_io_source_stage"] = first_io_stage.identity
     work.receipt["source_checkpoints"].update(post_write_cancel=cancel, post_hidapi_016=profile)
     for name, pin in work.receipt["nut"]["notices"].items():
         raw = read_file(source / name)
@@ -799,7 +818,8 @@ def compile_and_audit(work: Build, backend: Path, sdk: Path, locks: dict,
         raw = read_file(source / VENDOR_016 / name)
         require(digest(raw) == new_vendor[name], "HIDAPI notice changed")
         write_file(work.out / "upstream-notices/hidapi" / name, raw)
-    local_pins = {"source/" + name: pin for name, pin in profile.items()}
+    selected_native_map = work.receipt["source_checkpoints"].get("post_first_io", profile)
+    local_pins = {"source/" + name: pin for name, pin in selected_native_map.items()}
     local_pins.update({"source/" + VENDOR_016 + "/" + name: pin for name, pin in new_vendor.items()})
     local_pins.update({"build/" + name: pin for name, pin in generated.items()})
     flags = ["--no-default-config", "-arch", "arm64", "-isysroot", str(sdk), "-mmacosx-version-min=27.0",
@@ -884,6 +904,8 @@ def main() -> int:
     parser.add_argument("--autotools-bin", type=Path, required=True)
     parser.add_argument("--developer-dir", type=Path, default=Path("/Applications/Xcode.app/Contents/Developer"))
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--first-io-source-stage", type=Path,
+                        help="authenticate and overlay the optional E119 source-only stage")
     args = parser.parse_args()
     try:
         require(sys.platform == "darwin" and os.uname().machine == "arm64" and os.uname().release.split(".")[0] == "27"
@@ -899,6 +921,13 @@ def main() -> int:
         out = args.output_dir
         directory(out.parent)
         require(out.is_absolute() and out.resolve() == out and out != out.parent, "expected canonical absolute output path")
+        if args.first_io_source_stage is not None:
+            stage_path = args.first_io_source_stage
+            require(stage_path.is_absolute() and ".." not in stage_path.parts, "invalid first-IO stage path")
+            stage_resolved = stage_path.resolve(strict=True)
+            out_resolved = out.parent.resolve(strict=True) / out.name
+            require(out_resolved != stage_resolved and out_resolved not in stage_resolved.parents
+                    and stage_resolved not in out_resolved.parents, "output overlaps first-IO stage")
         os.umask(0o077)
         out.mkdir(mode=0o700)
     except (OSError, ValueError) as error:
@@ -916,6 +945,12 @@ def main() -> int:
         backend, nut, locks, vendors = kit_inputs(args.kit, args.kit_sha256, root, receipt)
         require(digest(read_file(backend / Path(__file__).name)) == receipt["runner_sha256"],
                 "running builder differs from kit project")
+        first_io_stage = None
+        if args.first_io_source_stage is not None:
+            validator_path = backend / "first_io_source_stage.py"
+            validator = load_module(validator_path, read_file(validator_path), "_ups_first_io_source_stage")
+            first_io_stage = validator.validate_source_stage(args.first_io_source_stage, backend)
+            receipt["first_io_source_stage"] = first_io_stage.identity
         helper_path = backend / "process_deadline.py"
         raw = read_file(helper_path)
         require(digest(raw) == SUPERVISOR_PIN, "wrong subprocess supervisor")
@@ -926,7 +961,10 @@ def main() -> int:
         work.watcher.start()
         sdk = work.set_up_tools(autotools, developer)
         generated = bootstrap(work, backend, nut, locks, vendors)
-        compile_and_audit(work, backend, sdk, locks, vendors, generated)
+        if first_io_stage is None:
+            compile_and_audit(work, backend, sdk, locks, vendors, generated)
+        else:
+            compile_and_audit(work, backend, sdk, locks, vendors, generated, first_io_stage)
         compiled = True
     except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
         receipt["failure"] = str(error)

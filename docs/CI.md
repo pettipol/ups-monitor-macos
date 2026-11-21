@@ -1,5 +1,38 @@
 # Continuous Integration
 
+## First-IO integration candidate: 2026-11-21
+
+The source candidate now includes the opt-in first-IO stage validator, native
+build and runtime-staging integration, and executable package-recipe checks.
+`scripts/check.sh` runs the new contracts with synthetic inputs. The dated
+successful run below predates this integration; consult the checks attached to
+the exact PR revision for its hosted result. The separate [local packaging
+record](VALIDATION.md#first-io-local-packaging-2026-11-21) does not replace CI or
+qualify hardware operation, widget rendering or distribution.
+
+## Successful hosted run: 2026-11-21
+
+[Run 44925373618](https://github.com/pettipol/ups-monitor-macos/actions/runs/44925373618)
+completed successfully with both workflow jobs passing for PR head
+`7a7d629ae2f71158fe815f7c28ff975f8fd6b96a`. The local review commit
+`d4710a6256fec65d10721597815141dde39cf477` and remote head have the same Git
+tree, `806bc3a949a012453559a33e53b681b8dbeb3b8a`. At that checkpoint PR #1
+was an open draft; there was no merge to `main`, tag or binary release. The run is a dated record,
+not a statement about current remote status or the latest revision.
+
+The offline reader job and the source/tests/ad-hoc-build job passed. The recorded
+counts are 739 Python tests (667 in the latter job and 72 reader contracts) and
+453 passing Swift test definitions (296 XCTest and 157 Swift Testing), plus two
+optional XCTest skips because the `upsc` bundle was absent. The Xcode app build
+completed with an ad-hoc identity. These counts describe test definitions, with
+no duplicated nested summaries or parameterized subcases.
+
+This run covers only the recorded tree. It does not include the later local
+E119/E120 first-IO source integration or private E116/E117
+evidence, hardware operation, UI or widget behavior, monitoring continuity,
+installation qualification or release. In particular, a green CI build is not
+a hardware or product qualification.
+
 ## Hosted candidate attempt: 2026-11-21
 
 [Run 44923796013](https://github.com/pettipol/ups-monitor-macos/actions/runs/44923796013)
@@ -21,10 +54,10 @@ among 14 tests. The follow-up canonicalizes only the synthetic fixture root;
 is still rejected before destination creation. Production checks are unchanged.
 The correction requires its own hosted result; the failed run is not a build PASS.
 
-The dated records below describe earlier checkpoints. Their `NOT RUN` claims
-do not override this hosted attempt. Consult the checks on
-[PR #1](https://github.com/pettipol/ups-monitor-macos/pull/1) for later revisions;
-hardware Stop, desktop-widget behavior and sustained monitoring remain separate.
+The dated record above supersedes this failed attempt for its own tree only.
+The attempt and subsequent correction history below remain useful checkpoints;
+later revisions require their own checks. Hardware Stop, desktop-widget
+behavior and sustained monitoring remain separate.
 
 ## Previous source review: 2026-11-19
 
@@ -198,19 +231,19 @@ eight diagnostic cases. See [E32 scope](PUBLIC_CLEANUP_REPLAY_E32.md). Neither
 this addition nor a local replay implies a hosted CI result or product release.
 
 The build job does not fetch/build NUT, discover local clients, or launch an
-UPS driver. Two optional actual-client interop tests are skipped because a
-separately qualified `upsc` bundle is deliberately absent. The historical run
-below passed the then-configured synthetic Swift and Python tests, Release
-builds and ad-hoc signature checks. The refreshed toolchain has no hosted build
-result; the image inventory now matches its Xcode pin, but provisioning and
-the exact preflight still need a hosted execution. A
-successful reader job is a distinct result and cannot clear this hold.
+UPS driver. In run 44925373618, two optional actual-client interop tests were
+skipped because a separately qualified `upsc` bundle was absent. The run passed
+the hosted exact-version preflight, synthetic Swift and Python tests, and the
+ad-hoc app build. Earlier local results and run 44923796013 remain historical
+checkpoints; they do not replace the dated successful result above or cover
+later revisions. A successful reader job alone is still distinct from a
+successful build job.
 Full NUT qualification must retain its separate evidence; a green base job
 cannot stand in for that check or for real UPS telemetry.
 
-Before publication acceptance, run this workflow from the intended public
-repository and record its revision, image, counts and skipped tests. The first
-source-preview run is recorded below. Add a
+Before publication acceptance, review this workflow from the intended public
+repository and record the exact revision, image, counts and skipped tests for
+that acceptance. The first source-preview run is recorded below. Add a
 separately reviewed reproducible NUT-client job and public replay runner before
 treating hosted CI as full transport qualification. The fake preflight does not
 execute SwiftPM, verify filesystem writes, or test process-tree cleanup; these

@@ -1,5 +1,12 @@
 # Bounded cleanup diagnostics
 
+An optional [first-IO source profile](../backend/nut/native-build/first-io-v1/README.md)
+adds a separate `UPS_FIRST_IO_TRANSITION_V1` record and
+`first-io-transition.json` to a staged candidate. It retains cleanup v1 and
+the public feed schema. The record can be absent if cleanup does not reach
+its emission point. This profile does not change the canonical runner or
+qualify hardware behavior.
+
 The operational Python runner can preserve a small diagnostic from native
 stderr in `cleanup-diagnostic.json`. This separate artifact does not change
 sample/end schema 2, the managed receipt, cancellation, or ownership decisions.
