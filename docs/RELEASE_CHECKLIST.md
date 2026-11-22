@@ -10,7 +10,25 @@ Their presence does not automatically clear any gate below.
 
 ## Foundation
 
+The [E89 local candidate check](LOCAL_VALIDATION_2026-11-19.md) verifies the
+updated HIDAPI 0.16 package and its source reconstruction. The separate H14
+controller simulation completed with normal Stop and cleanup; the real E89
+reader has not been run. These results do not clear the hardware, widget,
+continuity or distribution gates. The earlier observations below retain their
+original candidate scope.
+
+The local E74 package built and signed the app and widget using the native
+reader built in E73. Its archive and four component signatures were checked
+on the development Mac. H12 opened the separate E66 candidate and quit
+before acquisition started. The subsequent H13 terminal trial recorded eight
+fresh SMC1500I readings and a requested Stop. All owned processes closed, but
+the reader returned `guard_error`. A normal Stop still requires qualification. Desktop widget qualification
+also requires observing the system-hosted widget during capture and after Stop.
+See [compatibility](COMPATIBILITY.md) and the [local build procedure](REAL_PREVIEW_PACKAGE.md).
+
 - [ ] Source-only clean checkout builds using the documented toolchain.
+- [ ] The selected revision passes hosted CI with the documented toolchain.
+- [ ] The full native reader can be rebuilt from the declared source inputs on an independent build host.
 - [ ] Exact dependency revisions, licenses and checksums are recorded.
 - [ ] CI actions are reviewed and pinned; outside pull requests receive no secrets.
 - [ ] Deployment target is supported by APIs and validated separately from SDK version.
@@ -55,6 +73,7 @@ Their presence does not automatically clear any gate below.
 - [ ] Compatibility table distinguishes tested, experimental, unsupported and unknown cases.
 - [ ] Public repository and release links exist and match tested revisions.
 - [ ] Downloaded release artifact matches the recorded checksum and launches as documented.
+- [ ] Verify the download checksum, then install and open the intended artifact on an independent compatible Mac.
 - [ ] Signature/notarization status is explicit; users are not told to disable Gatekeeper.
 
 A source preview can be useful before every gate passes, but it must not be

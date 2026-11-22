@@ -1,0 +1,2604 @@
+diff --git a/drivers/Makefile.am b/drivers/Makefile.am
+--- a/drivers/Makefile.am
++++ b/drivers/Makefile.am
+@@ -242,7 +242,7 @@
+ apcmicrolink_LDADD += $(LDADD_DRIVERS_LIBUSB)
+ endif WITH_USB
+ if WITH_APCMICROLINK_HIDAPI
+-noinst_PROGRAMS = apcmicrolink-hidapi-observe
++noinst_PROGRAMS = apcmicrolink-hidapi-observe apcmicrolink-hidapi-continuous
+ apcmicrolink_hidapi_observe_SOURCES = main.c dstate.c apcmicrolink.c apcmicrolink-maps.c apc_common.c \
+ 	nut-guarded-policy.h apcmicrolink-usb.h \
+ 	apcmicrolink-hidapi-shared.c apcmicrolink-hidapi-shared-host.h \
+@@ -254,6 +254,13 @@
+ 	-I$(srcdir) -I$(srcdir)/hidapi-candidate -DMLINK_HIDAPI_NATIVE_CANDIDATE=1
+ apcmicrolink_hidapi_observe_LDADD = libdummy_serial.la libdummy_upsdrvquery.la $(LDADD_COMMON) $(SERLIBS)
+ apcmicrolink_hidapi_observe_LDFLAGS = $(LDFLAGS) -framework IOKit -framework CoreFoundation
++apcmicrolink_hidapi_continuous_SOURCES = $(apcmicrolink_hidapi_observe_SOURCES) \
++	apcmicrolink-continuous.c apcmicrolink-continuous.h
++apcmicrolink_hidapi_continuous_CFLAGS = $(AM_CFLAGS) \
++	-I$(srcdir) -I$(srcdir)/hidapi-candidate \
++	-DMLINK_HIDAPI_NATIVE_CANDIDATE=1 -DMLINK_HIDAPI_CONTINUOUS_CANDIDATE=1
++apcmicrolink_hidapi_continuous_LDADD = $(apcmicrolink_hidapi_observe_LDADD)
++apcmicrolink_hidapi_continuous_LDFLAGS = $(apcmicrolink_hidapi_observe_LDFLAGS)
+ endif WITH_APCMICROLINK_HIDAPI
+ apcsmart_SOURCES = apcsmart.c apcsmart_tabs.c
+ apcsmart_LDADD = $(LDADD_DRIVERS_SERIAL) $(LIBREGEX_LIBS)
+diff --git a/drivers/apcmicrolink-continuous.c b/drivers/apcmicrolink-continuous.c
+--- a/drivers/apcmicrolink-continuous.c
++++ b/drivers/apcmicrolink-continuous.c
+@@ -0,0 +1,316 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef _DARWIN_C_SOURCE
++#define _DARWIN_C_SOURCE 1
++#endif
++#include "apcmicrolink-continuous.h"
++
++#include <locale.h>
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#ifdef __APPLE__
++#include <xlocale.h>
++#endif
++
++static const mlink_continuous_kind_t expected_kinds[MLINK_CONTINUOUS_FIELD_COUNT] = {
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_REPORTED, MLINK_CONTINUOUS_STATIC,
++	MLINK_CONTINUOUS_STATIC, MLINK_CONTINUOUS_DRIVER_DERIVED,
++	MLINK_CONTINUOUS_DRIVER_DERIVED
++};
++
++static const char *const field_names[MLINK_CONTINUOUS_FIELD_COUNT] = {
++	"ups.status", "battery.charge", "battery.runtime", "battery.voltage",
++	"battery.temperature", "ups.temperature", "input.voltage",
++	"input.frequency", "output.voltage", "output.current",
++	"output.frequency", "ups.load", "experimental.ups.load.apparent",
++	"ups.realpower.nominal", "ups.power.nominal", "ups.realpower", "ups.power"
++};
++
++static const char *kind_name(mlink_continuous_kind_t kind)
++{
++	switch (kind) {
++	case MLINK_CONTINUOUS_REPORTED: return "reported";
++	case MLINK_CONTINUOUS_DRIVER_DERIVED: return "driverDerived";
++	case MLINK_CONTINUOUS_STATIC: return "static";
++	default: return NULL;
++	}
++}
++
++static const char *state_name(mlink_continuous_state_t state)
++{
++	switch (state) {
++	case MLINK_CONTINUOUS_OBSERVED: return "observed";
++	case MLINK_CONTINUOUS_UNAVAILABLE: return "unavailable";
++	case MLINK_CONTINUOUS_INVALID: return "invalid";
++	default: return NULL;
++	}
++}
++
++void mlink_continuous_fields_clear(mlink_continuous_field_t fields[MLINK_CONTINUOUS_FIELD_COUNT])
++{
++	size_t i;
++	for (i = 0; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
++		memset(&fields[i], 0, sizeof(fields[i]));
++		fields[i].state = MLINK_CONTINUOUS_UNAVAILABLE;
++		fields[i].kind = expected_kinds[i];
++	}
++}
++
++int mlink_continuous_number_valid(const char *value)
++{
++	const unsigned char *p = (const unsigned char *)value;
++	locale_t c_locale;
++	char *end = NULL;
++	double parsed;
++	int valid;
++	if (p == NULL || *p == '\0' || strlen(value) > MLINK_CONTINUOUS_MAX_VALUE)
++		return 0;
++	if (*p == '-') p++;
++	if (*p == '0') {
++		p++;
++		if (*p >= '0' && *p <= '9') return 0;
++	} else {
++		if (*p < '1' || *p > '9') return 0;
++		while (*p >= '0' && *p <= '9') p++;
++	}
++	if (*p == '.') {
++		p++;
++		if (*p < '0' || *p > '9') return 0;
++		while (*p >= '0' && *p <= '9') p++;
++	}
++	if (*p == 'e' || *p == 'E') {
++		unsigned int exponent_digits = 0;
++		p++;
++		if (*p == '+' || *p == '-') p++;
++		while (*p >= '0' && *p <= '9') { exponent_digits++; p++; }
++		if (exponent_digits == 0) return 0;
++	}
++	if (*p != '\0') return 0;
++	c_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
++	if (c_locale == (locale_t)0) return 0;
++	parsed = strtod_l(value, &end, c_locale);
++	valid = end != value && *end == '\0' && isfinite(parsed);
++	freelocale(c_locale);
++	return valid;
++}
++
++static int token_allowed(const char *token, size_t len)
++{
++	static const char *const tokens[] = {
++		"ALARM", "BOOST", "BYPASS", "CAL", "FSD", "HB", "LB", "OB",
++		"OFF", "OL", "OVER", "RB", "TRIM"
++	};
++	size_t i;
++	for (i = 0; i < sizeof(tokens) / sizeof(tokens[0]); i++) {
++		if (strlen(tokens[i]) == len && memcmp(tokens[i], token, len) == 0)
++			return 1;
++	}
++	return 0;
++}
++
++int mlink_continuous_status_valid(const char *value)
++{
++	const char *p = value;
++	const char *previous = NULL;
++	size_t previous_len = 0;
++	int saw_ol = 0, saw_ob = 0;
++	if (p == NULL || *p == '\0' || strlen(p) > 128U)
++		return 0;
++	while (*p != '\0') {
++		const char *start = p;
++		size_t len;
++		while (*p != '\0' && *p != ' ') {
++			if ((unsigned char)*p < 0x21U || (unsigned char)*p > 0x7eU)
++				return 0;
++			p++;
++		}
++		len = (size_t)(p - start);
++		if (len == 0 || !token_allowed(start, len)) return 0;
++		if (previous != NULL) {
++			int order = memcmp(previous, start,
++				previous_len < len ? previous_len : len);
++			if (order > 0 || (order == 0 && previous_len >= len)) return 0;
++		}
++		if (len == 2 && memcmp(start, "OL", 2) == 0) saw_ol = 1;
++		if (len == 2 && memcmp(start, "OB", 2) == 0) saw_ob = 1;
++		previous = start;
++		previous_len = len;
++		if (*p == ' ') {
++			p++;
++			if (*p == '\0' || *p == ' ') return 0;
++		}
++	}
++	return !(saw_ol && saw_ob);
++}
++
++static int value_valid(const char *value, size_t field_index)
++{
++	return field_index == 0U
++		? mlink_continuous_status_valid(value)
++		: mlink_continuous_number_valid(value);
++}
++
++int mlink_continuous_field_observed(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind, const char *value, uint32_t observed_ms)
++{
++	if (field == NULL || value == NULL || kind_name(kind) == NULL
++	 || strlen(value) >= sizeof(field->value))
++		return 0;
++	strcpy(field->value, value);
++	field->observed_ms = observed_ms;
++	field->kind = kind;
++	field->state = MLINK_CONTINUOUS_OBSERVED;
++	field->has_value = 1;
++	field->has_time = 1;
++	return 1;
++}
++
++void mlink_continuous_field_unavailable(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind)
++{
++	if (field == NULL) return;
++	memset(field, 0, sizeof(*field));
++	field->kind = kind;
++	field->state = MLINK_CONTINUOUS_UNAVAILABLE;
++}
++
++void mlink_continuous_field_invalid(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind)
++{
++	if (field == NULL) return;
++	memset(field, 0, sizeof(*field));
++	field->kind = kind;
++	field->state = MLINK_CONTINUOUS_INVALID;
++}
++
++void mlink_continuous_field_mirror(mlink_continuous_field_t *destination,
++	const mlink_continuous_field_t *source)
++{
++	if (destination == NULL || source == NULL) return;
++	*destination = *source;
++}
++
++int mlink_continuous_page_dependency(const mlink_continuous_page_t *pages,
++	size_t page_count, size_t width, size_t blob_len, size_t offset,
++	size_t size, uint64_t *oldest_ms)
++{
++	size_t end, first, last, page;
++	uint64_t oldest = UINT64_MAX;
++	if (pages == NULL || oldest_ms == NULL || width == 0 || size == 0
++	 || offset > blob_len || size > blob_len - offset)
++		return 0;
++	end = offset + size;
++	first = offset / width;
++	last = (end - 1U) / width;
++	if (last >= page_count) return 0;
++	for (page = first; page <= last; page++) {
++		size_t page_start = page * width;
++		size_t required = end - page_start < width ? end - page_start : width;
++		if (!pages[page].received_valid || !pages[page].copied_valid
++		 || pages[page].copied_len < required)
++			return 0;
++		if (pages[page].received_ms < oldest) oldest = pages[page].received_ms;
++	}
++	if (oldest == UINT64_MAX) return 0;
++	*oldest_ms = oldest;
++	return 1;
++}
++
++int mlink_continuous_definition_unchanged(const unsigned char *admitted,
++	size_t admitted_len, const unsigned char *current, size_t current_len,
++	size_t begin, size_t end)
++{
++	if (admitted == NULL || current == NULL || begin > end
++	 || end > admitted_len || end > current_len)
++		return 0;
++	return memcmp(admitted + begin, current + begin, end - begin) == 0;
++}
++
++int mlink_continuous_definition_range_valid(size_t data_ptr_offset,
++	size_t parsed_end, size_t blob_len, size_t max_definition_len)
++{
++	return data_ptr_offset > 12U && data_ptr_offset <= blob_len
++		&& parsed_end >= 12U && parsed_end <= data_ptr_offset
++		&& data_ptr_offset - 12U <= max_definition_len;
++}
++
++static const char *reason_name(mlink_continuous_end_reason_t reason)
++{
++	switch (reason) {
++	case MLINK_CONTINUOUS_END_DURATION_COMPLETE: return "duration_complete";
++	case MLINK_CONTINUOUS_END_CANCELLED: return "cancelled";
++	case MLINK_CONTINUOUS_END_DEVICE_LOST: return "device_lost";
++	case MLINK_CONTINUOUS_END_SESSION_LOST: return "session_lost";
++	case MLINK_CONTINUOUS_END_GUARD_ERROR: return "guard_error";
++	case MLINK_CONTINUOUS_END_OUTPUT_ERROR: return "output_error";
++	default: return NULL;
++	}
++}
++
++int mlink_continuous_sample_line(char *out, size_t out_size,
++	uint32_t sequence, uint32_t slot, uint32_t elapsed_ms,
++	uint32_t missed_slots,
++	const mlink_continuous_field_t fields[MLINK_CONTINUOUS_FIELD_COUNT])
++{
++	size_t used = 0, i;
++	int n;
++	if (out == NULL || fields == NULL || out_size == 0 || sequence < 1U
++	 || sequence > 24U || slot > 23U || elapsed_ms > 119999U
++	 || slot != elapsed_ms / 5000U
++	 || slot + 1U < sequence || missed_slots != slot + 1U - sequence
++	 || missed_slots > 23U)
++		return 0;
++	n = snprintf(out, out_size,
++		"{\"protocol\":\"ups-monitor.continuous.v1\",\"schema_version\":1,\"type\":\"sample\",\"sequence\":%u,\"slot\":%u,\"elapsed_ms\":%u,\"missed_slots\":%u,\"fields\":{",
++		sequence, slot, elapsed_ms, missed_slots);
++	if (n < 0 || (size_t)n >= out_size) return 0;
++	used = (size_t)n;
++	for (i = 0; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
++		const mlink_continuous_field_t *field = &fields[i];
++		const char *kind = kind_name(field->kind);
++		const char *state = state_name(field->state);
++		char observed[16];
++		if (kind == NULL || state == NULL) return 0;
++		if (field->kind != expected_kinds[i]) return 0;
++		if ((field->state == MLINK_CONTINUOUS_OBSERVED) != (field->has_value && field->has_time)) return 0;
++		if (field->state != MLINK_CONTINUOUS_OBSERVED && (field->has_value || field->has_time)) return 0;
++		if (field->state == MLINK_CONTINUOUS_OBSERVED
++		 && (field->observed_ms > elapsed_ms || !value_valid(field->value, i))) return 0;
++		if (field->has_time) {
++			snprintf(observed, sizeof(observed), "%u", field->observed_ms);
++		} else {
++			strcpy(observed, "null");
++		}
++		n = snprintf(out + used, out_size - used,
++			"%s\"%s\":{\"value\":%s%s%s,\"observed_ms\":%s,\"kind\":\"%s\",\"state\":\"%s\"}",
++			i == 0 ? "" : ",", field_names[i],
++			field->has_value ? "\"" : "", field->has_value ? field->value : "null",
++			field->has_value ? "\"" : "", observed, kind, state);
++		if (n < 0 || (size_t)n >= out_size - used) return 0;
++		used += (size_t)n;
++	}
++	n = snprintf(out + used, out_size - used, "}}\n");
++	if (n < 0 || (size_t)n >= out_size - used) return 0;
++	used += (size_t)n;
++	return used <= MLINK_CONTINUOUS_MAX_LINE;
++}
++
++int mlink_continuous_end_line(char *out, size_t out_size,
++	uint32_t elapsed_ms, mlink_continuous_end_reason_t reason)
++{
++	const char *name = reason_name(reason);
++	int n;
++	if (out == NULL || out_size == 0 || elapsed_ms > 132000U || name == NULL)
++		return 0;
++	n = snprintf(out, out_size,
++		"{\"protocol\":\"ups-monitor.continuous.v1\",\"schema_version\":1,\"type\":\"end\",\"elapsed_ms\":%u,\"reason\":\"%s\"}\n",
++		elapsed_ms, name);
++	return n >= 0 && (size_t)n < out_size && (size_t)n <= MLINK_CONTINUOUS_MAX_LINE;
++}
+diff --git a/drivers/apcmicrolink-continuous.h b/drivers/apcmicrolink-continuous.h
+--- a/drivers/apcmicrolink-continuous.h
++++ b/drivers/apcmicrolink-continuous.h
+@@ -0,0 +1,75 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef APCMICROLINK_CONTINUOUS_H
++#define APCMICROLINK_CONTINUOUS_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define MLINK_CONTINUOUS_FIELD_COUNT 17U
++#define MLINK_CONTINUOUS_MAX_LINE 8192U
++#define MLINK_CONTINUOUS_MAX_VALUE 32U
++
++typedef enum {
++	MLINK_CONTINUOUS_REPORTED,
++	MLINK_CONTINUOUS_DRIVER_DERIVED,
++	MLINK_CONTINUOUS_STATIC
++} mlink_continuous_kind_t;
++
++typedef enum {
++	MLINK_CONTINUOUS_OBSERVED,
++	MLINK_CONTINUOUS_UNAVAILABLE,
++	MLINK_CONTINUOUS_INVALID
++} mlink_continuous_state_t;
++
++typedef struct {
++	char value[129U];
++	uint32_t observed_ms;
++	mlink_continuous_kind_t kind;
++	mlink_continuous_state_t state;
++	int has_value;
++	int has_time;
++} mlink_continuous_field_t;
++
++typedef struct {
++	uint64_t received_ms;
++	size_t copied_len;
++	int received_valid;
++	int copied_valid;
++} mlink_continuous_page_t;
++
++typedef enum {
++	MLINK_CONTINUOUS_END_DURATION_COMPLETE,
++	MLINK_CONTINUOUS_END_CANCELLED,
++	MLINK_CONTINUOUS_END_DEVICE_LOST,
++	MLINK_CONTINUOUS_END_SESSION_LOST,
++	MLINK_CONTINUOUS_END_GUARD_ERROR,
++	MLINK_CONTINUOUS_END_OUTPUT_ERROR
++} mlink_continuous_end_reason_t;
++
++void mlink_continuous_fields_clear(mlink_continuous_field_t fields[MLINK_CONTINUOUS_FIELD_COUNT]);
++int mlink_continuous_field_observed(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind, const char *value, uint32_t observed_ms);
++void mlink_continuous_field_unavailable(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind);
++void mlink_continuous_field_invalid(mlink_continuous_field_t *field,
++	mlink_continuous_kind_t kind);
++void mlink_continuous_field_mirror(mlink_continuous_field_t *destination,
++	const mlink_continuous_field_t *source);
++int mlink_continuous_number_valid(const char *value);
++int mlink_continuous_status_valid(const char *value);
++int mlink_continuous_page_dependency(const mlink_continuous_page_t *pages,
++	size_t page_count, size_t width, size_t blob_len, size_t offset,
++	size_t size, uint64_t *oldest_ms);
++int mlink_continuous_definition_unchanged(const unsigned char *admitted,
++	size_t admitted_len, const unsigned char *current, size_t current_len,
++	size_t begin, size_t end);
++int mlink_continuous_definition_range_valid(size_t data_ptr_offset,
++	size_t parsed_end, size_t blob_len, size_t max_definition_len);
++int mlink_continuous_sample_line(char *out, size_t out_size,
++	uint32_t sequence, uint32_t slot, uint32_t elapsed_ms,
++	uint32_t missed_slots,
++	const mlink_continuous_field_t fields[MLINK_CONTINUOUS_FIELD_COUNT]);
++int mlink_continuous_end_line(char *out, size_t out_size,
++	uint32_t elapsed_ms, mlink_continuous_end_reason_t reason);
++
++#endif /* APCMICROLINK_CONTINUOUS_H */
+diff --git a/drivers/apcmicrolink-hidapi-native.c b/drivers/apcmicrolink-hidapi-native.c
+--- a/drivers/apcmicrolink-hidapi-native.c
++++ b/drivers/apcmicrolink-hidapi-native.c
+@@ -432,6 +432,17 @@
+ 	native_stop, native_clock, native_get_admission_diagnostic
+ };
+ 
++int mlink_hidapi_native_post_finish_clock_ms(int64_t *now_ms)
++{
++	struct timespec now;
++	if (now_ms == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0
++	 || now.tv_sec < 0 || now.tv_nsec < 0 || now.tv_nsec >= 1000000000L
++	 || (uintmax_t)now.tv_sec > (uintmax_t)INT64_MAX / 1000U
++	 || (int64_t)now.tv_sec * 1000 > INT64_MAX - now.tv_nsec / 1000000L) return -1;
++	*now_ms = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000L;
++	return 0;
++}
++
+ int mlink_hidapi_native_create(const mlink_hidapi_native_config_t *config,
+ 	mlink_hidapi_native_binding_t *binding)
+ {
+diff --git a/drivers/apcmicrolink-hidapi-native.h b/drivers/apcmicrolink-hidapi-native.h
+--- a/drivers/apcmicrolink-hidapi-native.h
++++ b/drivers/apcmicrolink-hidapi-native.h
+@@ -29,5 +29,7 @@
+  * close has returned may this release HIDAPI globals with hid_exit and free.
+  * A failed hid_exit retains ownership. Success zeroes the caller's bundle. */
+ int mlink_hidapi_native_dispose(mlink_hidapi_native_binding_t *binding);
++/* Clock read independent of the owner, safe after dispose. */
++int mlink_hidapi_native_post_finish_clock_ms(int64_t *now_ms);
+ 
+ #endif
+diff --git a/drivers/apcmicrolink-hidapi-shared.c b/drivers/apcmicrolink-hidapi-shared.c
+--- a/drivers/apcmicrolink-hidapi-shared.c
++++ b/drivers/apcmicrolink-hidapi-shared.c
+@@ -29,6 +29,9 @@
+ 	mlink_shared_layout_t layout;
+ 	int guard_started;
+ 	int guard_invalid;
++	int acquisition_set;
++	int acquisition_expired;
++	int cleanup_stop_attempted;
+ 	int terminal;
+ 	int attempted;
+ 	int opened;
+@@ -40,7 +43,11 @@
+ 	int in_api;
+ 	int have_clock;
+ 	int64_t last_clock_ms;
++	int64_t guard_start_ms;
+ 	int64_t deadline_ms;
++	int64_t acquisition_deadline_ms;
++	int64_t finish_clock_ms;
++	int finish_clock_valid;
+ 	mlink_admission_diagnostic_t admission_diagnostic;
+ 	unsigned char report[REPORT_SIZE];
+ 	size_t report_pos;
+@@ -229,6 +236,13 @@
+ 		state.terminal = 1;
+ 		return 0;
+ 	}
++	if (state.acquisition_set && now >= state.acquisition_deadline_ms) {
++		state.acquisition_expired = 1;
++		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
++			MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
++		state.terminal = 1;
++		return 0;
++	}
+ 	return 1;
+ }
+ 
+@@ -328,6 +342,7 @@
+ 		state.terminal = 1;
+ 		return 0;
+ 	}
++	state.guard_start_ms = now;
+ 	if (now > INT64_MAX - (int64_t)seconds * 1000) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
+@@ -343,6 +358,50 @@
+ {
+ 	if (!state.guard_started) return 0;
+ 	return !usable();
++}
++
++int microlink_usb_guard_elapsed_ms(uint64_t *elapsed_ms)
++{
++	int64_t now;
++	if (elapsed_ms == NULL || !state.guard_started || state.guard_invalid
++	 || !clock_now(&now) || now < state.guard_start_ms) {
++		return 0;
++	}
++	*elapsed_ms = (uint64_t)(now - state.guard_start_ms);
++	if (state.acquisition_set && now >= state.acquisition_deadline_ms) {
++		state.acquisition_expired = 1;
++		if (!state.terminal) {
++			record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
++				MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
++			state.terminal = 1;
++		}
++	}
++	return 1;
++}
++
++int microlink_usb_guard_finish_elapsed_ms(uint64_t *elapsed_ms)
++{
++	if (elapsed_ms == NULL || !state.guard_started || state.guard_invalid
++	 || !state.finish_clock_valid || state.finish_clock_ms < state.guard_start_ms
++	 || state.finish_clock_ms >= state.deadline_ms
++	 || (state.have_clock && state.finish_clock_ms < state.last_clock_ms)) return 0;
++	*elapsed_ms = (uint64_t)(state.finish_clock_ms - state.guard_start_ms);
++	return 1;
++}
++
++int microlink_usb_guard_set_acquisition_seconds(unsigned int seconds)
++{
++	int64_t now;
++	if (state.acquisition_set || !state.guard_started || state.guard_invalid
++	 || state.terminal || seconds == 0U || seconds > 120U
++	 || !clock_now(&now) || now < state.guard_start_ms
++	 || state.guard_start_ms > INT64_MAX - (int64_t)seconds * 1000) {
++		return 0;
++	}
++	state.acquisition_deadline_ms = state.guard_start_ms + (int64_t)seconds * 1000;
++	if (state.acquisition_deadline_ms >= state.deadline_ms) return 0;
++	state.acquisition_set = 1;
++	return 1;
+ }
+ 
+ int microlink_usb_open(void)
+@@ -582,12 +641,27 @@
+ 	return -1;
+ }
+ 
+-int microlink_usb_send_bytes(const unsigned char *buf, size_t len)
++static int microlink_usb_send_bytes_internal(const unsigned char *buf, size_t len,
++	int cleanup_stop)
+ {
+ 	unsigned char outgoing[REPORT_SIZE];
+ 	ssize_t count;
++	int64_t now;
++	if (cleanup_stop) {
++		/* This bypasses the acquisition cutoff and cancellation callback only
++		 * for the exact cleanup STOP. No data exchange or retry can use it. */
++		if (buf == NULL || len != 1U || buf[0] != 0xF7U
++		 || state.cleanup_stop_attempted || !state.acquisition_set
++		 || !state.guard_started || state.guard_invalid || !state.opened
++		 || !state.admitted || state.ops == NULL
++		 || state.ops->write_report == NULL
++		 || !clock_now(&now) || now >= state.deadline_ms) {
++			return 0;
++		}
++		state.cleanup_stop_attempted = 1;
++	}
+ 	if (buf == NULL || len == 0 || len > PAYLOAD_SIZE || !state.admitted
+-	 || !usable() || state.ops == NULL || state.ops->write_report == NULL) {
++	 || (!cleanup_stop && !usable()) || state.ops == NULL || state.ops->write_report == NULL) {
+ 		state.terminal = 1;
+ 		return 0;
+ 	}
+@@ -597,11 +671,23 @@
+ 	api_enter();
+ 	count = state.ops->write_report(state.user, outgoing, sizeof(outgoing));
+ 	api_leave();
+-	if (count != REPORT_SIZE || !usable() || !state.opened) {
+-		state.terminal = 1;
+-		return 0;
+-	}
+-	return 1;
++	if (count != REPORT_SIZE || (!cleanup_stop && !usable()) || !state.opened
++	 || (cleanup_stop && (!clock_now(&now) || now >= state.deadline_ms))) {
++		state.terminal = 1;
++		return 0;
++	}
++	return 1;
++}
++
++int microlink_usb_send_bytes(const unsigned char *buf, size_t len)
++{
++	return microlink_usb_send_bytes_internal(buf, len, 0);
++}
++
++int microlink_usb_cleanup_stop(void)
++{
++	static const unsigned char stop_byte = 0xF7U;
++	return microlink_usb_send_bytes_internal(&stop_byte, 1U, 1);
+ }
+ 
+ int microlink_usb_get_char(unsigned char *ch, long d_usec)
+@@ -760,13 +846,19 @@
+ 	 * again after that point, but a failed dispose itself is never retried. */
+ 	microlink_usb_close();
+ 	if (state.opened || state.opening || state.in_api || state.close_pending) {
++		state.finish_clock_valid = mlink_hidapi_native_post_finish_clock_ms(&state.finish_clock_ms) == 0;
+ 		return MLINK_HIDAPI_SESSION_RETAINED;
+ 	}
+-	if (native_dispose_attempted) return MLINK_HIDAPI_SESSION_RETAINED;
++	if (native_dispose_attempted) {
++		state.finish_clock_valid = mlink_hidapi_native_post_finish_clock_ms(&state.finish_clock_ms) == 0;
++		return MLINK_HIDAPI_SESSION_RETAINED;
++	}
+ 	native_dispose_attempted = 1;
+ 	if (mlink_hidapi_native_dispose(&native_binding) != 0) {
++		state.finish_clock_valid = mlink_hidapi_native_post_finish_clock_ms(&state.finish_clock_ms) == 0;
+ 		return MLINK_HIDAPI_SESSION_RETAINED;
+ 	}
++	state.finish_clock_valid = mlink_hidapi_native_post_finish_clock_ms(&state.finish_clock_ms) == 0;
+ 	state.ops = NULL;
+ 	state.user = NULL;
+ 	memset(&state.layout, 0, sizeof(state.layout));
+diff --git a/drivers/apcmicrolink-usb.h b/drivers/apcmicrolink-usb.h
+--- a/drivers/apcmicrolink-usb.h
++++ b/drivers/apcmicrolink-usb.h
+@@ -14,6 +14,7 @@
+ #define APCMICROLINK_USB_H
+ 
+ #include <stddef.h>
++#include <stdint.h>
+ 
+ /* Register the usual vendorid/productid/vendor/product/serial/bus/device
+  * (and busport, if supported) addvar() options used to disambiguate which
+@@ -29,6 +30,15 @@
+ /* Returns 1 only when a requested guarded budget is expired or terminally
+  * invalid. Returns 0 when no budget was requested or it remains valid. */
+ int microlink_usb_guard_expired(void);
++
++/* Read milliseconds elapsed from the original guarded start without
++ * restarting the monotonic budget. Candidate stream only. */
++int microlink_usb_guard_elapsed_ms(uint64_t *elapsed_ms);
++/* Monotonic observation captured after native close and owner disposal. */
++int microlink_usb_guard_finish_elapsed_ms(uint64_t *elapsed_ms);
++
++/* Fix a stricter acquisition cutoff inside the already-started native guard. */
++int microlink_usb_guard_set_acquisition_seconds(unsigned int seconds);
+ 
+ /* Open the USB Microlink UPS matching the driver's vendorid/productid/
+  * vendor/product/serial/bus/device filters (or the first supported device
+@@ -51,6 +61,10 @@
+  * write frame, or a single control byte) as one HID Output Report.
+  * Returns 1 on success, 0 on failure - mirrors ser_send_buf()'s use here. */
+ int microlink_usb_send_bytes(const unsigned char *buf, size_t len);
++
++/* Stream-candidate shutdown only: make the single terminal STOP write using
++ * the remaining existing guard margin, then forbid further protocol I/O. */
++int microlink_usb_cleanup_stop(void);
+ 
+ /* Fetch the next unconsumed byte of the Microlink byte stream, refilling
+  * from a fresh HID Input Report via the interrupt endpoint as needed.
+diff --git a/drivers/apcmicrolink.c b/drivers/apcmicrolink.c
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -19,6 +19,17 @@
+ #include <stdint.h>
+ #include <string.h>
+ #include <strings.h>
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++#include <locale.h>
++#include <math.h>
++#include <stdio.h>
++#include <errno.h>
++#include <sys/select.h>
++#ifdef __APPLE__
++#include <xlocale.h>
++#endif
++#include "apcmicrolink-continuous.h"
++#endif
+ 
+ #include "serial.h"
+ #include "nut_stdint.h"
+@@ -272,6 +283,7 @@
+ #ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
+ static int hidapi_auth_write_scope = 0;
+ static int hidapi_finish_called = 0;
++static mlink_hidapi_session_finish_t hidapi_finish_status = MLINK_HIDAPI_SESSION_RETAINED;
+ static const char *const hidapi_forbidden_options[] = {
+ 	"vendorid", "productid", "vendor", "product", "serial", "bus", "device", "busport",
+ 	"allow_duplicates", "usb_set_altinterface", "usb_config_index", "usb_hid_rep_index",
+@@ -282,7 +294,8 @@
+ {
+ 	if (hidapi_finish_called) return;
+ 	hidapi_finish_called = 1;
+-	if (mlink_shared_finish_native() == MLINK_HIDAPI_SESSION_RETAINED) {
++	hidapi_finish_status = mlink_shared_finish_native();
++	if (hidapi_finish_status == MLINK_HIDAPI_SESSION_RETAINED) {
+ 		upslogx(LOG_ERR, "apcmicrolink HIDAPI: terminal cleanup retained ownership; no retry");
+ 	}
+ }
+@@ -340,6 +353,46 @@
+ static size_t descriptor_blob_len = 0;
+ static microlink_descriptor_usage_t descriptor_usages[MLINK_DESCRIPTOR_MAX_USAGES];
+ static unsigned char descriptor_blob[MLINK_DESCRIPTOR_MAX_BLOB];
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++enum {
++	MLINK_CONT_FIELD_STATUS = 0,
++	MLINK_CONT_FIELD_BATTERY_CHARGE,
++	MLINK_CONT_FIELD_BATTERY_RUNTIME,
++	MLINK_CONT_FIELD_BATTERY_VOLTAGE,
++	MLINK_CONT_FIELD_BATTERY_TEMPERATURE,
++	MLINK_CONT_FIELD_UPS_TEMPERATURE,
++	MLINK_CONT_FIELD_INPUT_VOLTAGE,
++	MLINK_CONT_FIELD_INPUT_FREQUENCY,
++	MLINK_CONT_FIELD_OUTPUT_VOLTAGE,
++	MLINK_CONT_FIELD_OUTPUT_CURRENT,
++	MLINK_CONT_FIELD_OUTPUT_FREQUENCY,
++	MLINK_CONT_FIELD_UPS_LOAD,
++	MLINK_CONT_FIELD_APPARENT_LOAD,
++	MLINK_CONT_FIELD_REALPOWER_NOMINAL,
++	MLINK_CONT_FIELD_POWER_NOMINAL,
++	MLINK_CONT_FIELD_REALPOWER,
++	MLINK_CONT_FIELD_POWER
++};
++static int continuous_mode = 0;
++static int continuous_guard_error = 0;
++static int continuous_terminal_latched = 0;
++static int continuous_geometry_admitted = 0;
++static uint64_t continuous_last_elapsed_ms = 0;
++static uint32_t continuous_sequence = 0;
++static uint32_t continuous_last_slot = 0;
++static int continuous_have_slot = 0;
++static mlink_continuous_end_reason_t continuous_end_reason = MLINK_CONTINUOUS_END_DURATION_COMPLETE;
++static mlink_continuous_field_t continuous_fields[MLINK_CONTINUOUS_FIELD_COUNT];
++static mlink_continuous_page_t continuous_object_pages[256];
++static mlink_continuous_page_t continuous_blob_pages[256];
++static unsigned char continuous_definition[MLINK_DESCRIPTOR_MAX_BLOB];
++static size_t continuous_definition_len = 0;
++static size_t continuous_data_ptr_offset = 0;
++static unsigned char continuous_geometry[16];
++static int continuous_cleanup_done = 0;
++static int continuous_cleanup_ok = 0;
++static int continuous_cleanup_clock_ok = 0;
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+ static int show_internals = -1;
+ static int show_unmapped = -1;
+ static const char *const outlet_suffixes[] = {
+@@ -431,6 +484,16 @@
+ 	const microlink_desc_value_map_t *entry);
+ static size_t microlink_parse_descriptor_collection(const unsigned char *blob, size_t blob_len,
+ 	size_t pos, size_t *data_offset, const char *path);
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static void microlink_continuous_geometry_bytes(unsigned char out[16]);
++static int microlink_continuous_admit_definition(size_t data_ptr_offset, size_t parsed_end);
++static int microlink_continuous_check_definition(void);
++static void microlink_continuous_capture_descriptor(const char *name,
++	const char *path, const microlink_descriptor_usage_t *usage, int decoded);
++static void microlink_continuous_capture_status(void);
++static void microlink_continuous_capture_derived(void);
++static void microlink_continuous_latch_end(mlink_continuous_end_reason_t reason);
++#endif
+ 
+ static int microlink_parse_baudrate(const char *text, speed_t *baudrate)
+ {
+@@ -1903,6 +1966,7 @@
+ 	const microlink_descriptor_usage_t *usage;
+ 	const unsigned char *data;
+ 	size_t size;
++	int decoded = 0;
+ 
+ 	usage = microlink_find_descriptor_usage(path);
+ 	if (usage == NULL || usage->skipped) {
+@@ -1923,31 +1987,168 @@
+ #include "nut-pragmas-covered-switch-default.h"
+ 	switch (entry->type) {
+ 	case MLINK_DESC_STRING:
+-		return microlink_set_descriptor_string_info(name, data, size);
++		decoded = microlink_set_descriptor_string_info(name, data, size);
++		break;
+ 	case MLINK_DESC_HEX:
+-		return microlink_set_descriptor_hex_info(name, data, size);
++		decoded = microlink_set_descriptor_hex_info(name, data, size);
++		break;
+ 	case MLINK_DESC_FIXED_POINT:
+-		return microlink_set_descriptor_fixed_point_info(name, data, size,
++		decoded = microlink_set_descriptor_fixed_point_info(name, data, size,
+ 			entry->sign, entry->bin_point);
++		break;
+ 	case MLINK_DESC_FIXED_POINT_MAP:
+-		return microlink_set_descriptor_fixed_point_map_info(name, data, size,
++		decoded = microlink_set_descriptor_fixed_point_map_info(name, data, size,
+ 			entry->sign, entry->bin_point, entry->map);
++		break;
+ 	case MLINK_DESC_DATE:
+-		return microlink_set_descriptor_date_info(name, data, size);
++		decoded = microlink_set_descriptor_date_info(name, data, size);
++		break;
+ 	case MLINK_DESC_TIME:
+-		return microlink_set_descriptor_time_info(name, data, size);
++		decoded = microlink_set_descriptor_time_info(name, data, size);
++		break;
+ 	case MLINK_DESC_BITFIELD_MAP:
+-		return microlink_set_descriptor_map_info(name, data, size, entry->map,
++		decoded = microlink_set_descriptor_map_info(name, data, size, entry->map,
+ 			MLINK_MAP_BITFIELD);
++		break;
+ 	case MLINK_DESC_ENUM_MAP:
+-		return microlink_set_descriptor_map_info(name, data, size, entry->map,
++		decoded = microlink_set_descriptor_map_info(name, data, size, entry->map,
+ 			MLINK_MAP_VALUE);
++		break;
+ 	case MLINK_DESC_NONE:
+ 	default:
+-		return 0;
++		decoded = 0;
++		break;
+ 	}
+ #include "nut-pragmas-covered-switch-default-end.h"
+-}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		microlink_continuous_capture_descriptor(name, path, usage, decoded);
++	}
++#endif
++	return decoded;
++}
++
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static int microlink_continuous_field_index(const char *name,
++	mlink_continuous_kind_t *kind)
++{
++	static const char *const names[MLINK_CONTINUOUS_FIELD_COUNT] = {
++		"ups.status", "battery.charge", "battery.runtime", "battery.voltage",
++		"battery.temperature", "ups.temperature", "input.voltage",
++		"input.frequency", "output.voltage", "output.current",
++		"output.frequency", "ups.load", "experimental.ups.load.apparent",
++		"ups.realpower.nominal", "ups.power.nominal", "ups.realpower", "ups.power"
++	};
++	size_t i;
++	if (name == NULL) return -1;
++	for (i = 1U; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
++		if (!strcmp(name, names[i])) {
++			if (kind != NULL) {
++				*kind = (i == MLINK_CONT_FIELD_REALPOWER_NOMINAL
++					|| i == MLINK_CONT_FIELD_POWER_NOMINAL)
++					? MLINK_CONTINUOUS_STATIC : MLINK_CONTINUOUS_REPORTED;
++			}
++			return (int)i;
++		}
++	}
++	return -1;
++}
++
++static int microlink_continuous_normalize_number(const char *source,
++	char destination[MLINK_CONTINUOUS_MAX_VALUE + 1U])
++{
++	const struct lconv *locale_info;
++	const char *decimal;
++	const char *found;
++	size_t length, decimal_len, prefix_len, suffix_len;
++	if (source == NULL) return 0;
++	length = strlen(source);
++	if (length > MLINK_CONTINUOUS_MAX_VALUE) return 0;
++	locale_info = localeconv();
++	decimal = (locale_info != NULL && locale_info->decimal_point != NULL)
++		? locale_info->decimal_point : ".";
++	if (!strcmp(decimal, ".")) {
++		memcpy(destination, source, length + 1U);
++		return mlink_continuous_number_valid(destination);
++	}
++	decimal_len = strlen(decimal);
++	if (decimal_len == 0U) return 0;
++	found = strstr(source, decimal);
++	if (found == NULL) {
++		memcpy(destination, source, length + 1U);
++		return mlink_continuous_number_valid(destination);
++	}
++	if (strstr(found + decimal_len, decimal) != NULL) return 0;
++	prefix_len = (size_t)(found - source);
++	suffix_len = length - prefix_len - decimal_len;
++	if (prefix_len + 1U + suffix_len > MLINK_CONTINUOUS_MAX_VALUE) return 0;
++	memcpy(destination, source, prefix_len);
++	destination[prefix_len] = '.';
++	memcpy(destination + prefix_len + 1U, found + decimal_len, suffix_len);
++	destination[prefix_len + 1U + suffix_len] = '\0';
++	return mlink_continuous_number_valid(destination);
++}
++
++static void microlink_continuous_clear_dynamic_fields(void)
++{
++	mlink_continuous_field_t real_nominal = continuous_fields[MLINK_CONT_FIELD_REALPOWER_NOMINAL];
++	mlink_continuous_field_t va_nominal = continuous_fields[MLINK_CONT_FIELD_POWER_NOMINAL];
++	mlink_continuous_fields_clear(continuous_fields);
++	continuous_fields[MLINK_CONT_FIELD_REALPOWER_NOMINAL] = real_nominal;
++	continuous_fields[MLINK_CONT_FIELD_POWER_NOMINAL] = va_nominal;
++}
++
++static void microlink_continuous_mirror_temperature(void)
++{
++	mlink_continuous_field_mirror(
++		&continuous_fields[MLINK_CONT_FIELD_UPS_TEMPERATURE],
++		&continuous_fields[MLINK_CONT_FIELD_BATTERY_TEMPERATURE]);
++}
++
++static void microlink_continuous_capture_descriptor(const char *name,
++	const char *path, const microlink_descriptor_usage_t *usage, int decoded)
++{
++	mlink_continuous_kind_t kind = MLINK_CONTINUOUS_REPORTED;
++	mlink_continuous_field_t *field;
++	uint64_t observed_ms;
++	char wire_value[MLINK_CONTINUOUS_MAX_VALUE + 1U];
++	const char *value;
++	int index = microlink_continuous_field_index(name, &kind);
++	NUT_UNUSED_VARIABLE(path);
++	if (index < 0) return;
++	field = &continuous_fields[index];
++	if (!decoded || usage == NULL || usage->skipped
++	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
++		page0.width, descriptor_blob_len, usage->data_offset, usage->size,
++		&observed_ms)
++	 || observed_ms > 119999U) {
++		mlink_continuous_field_unavailable(field, kind);
++		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
++			microlink_continuous_mirror_temperature();
++		return;
++	}
++	value = dstate_getinfo(name);
++	if (value == NULL) {
++		mlink_continuous_field_unavailable(field, kind);
++		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
++			microlink_continuous_mirror_temperature();
++		return;
++	}
++	if (!microlink_continuous_normalize_number(value, wire_value)) {
++		mlink_continuous_field_invalid(field, kind);
++		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
++			microlink_continuous_mirror_temperature();
++		return;
++	}
++	if (!mlink_continuous_field_observed(field, kind, wire_value,
++		(uint32_t)observed_ms)) {
++		mlink_continuous_field_invalid(field, kind);
++	}
++	if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE) {
++		microlink_continuous_mirror_temperature();
++	}
++}
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+ 
+ static size_t microlink_parse_descriptor_collection(const unsigned char *blob, size_t blob_len,
+ 	size_t pos, size_t *data_offset, const char *path)
+@@ -2638,6 +2839,80 @@
+ 	return pos;
+ }
+ 
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static void microlink_continuous_latch_end(mlink_continuous_end_reason_t reason)
++{
++	if (!continuous_terminal_latched) {
++		continuous_end_reason = reason;
++		continuous_terminal_latched = 1;
++	}
++}
++
++static void microlink_continuous_geometry_bytes(unsigned char out[16])
++{
++	memset(out, 0, 16U);
++	out[0] = page0.version;
++	out[1] = page0.width;
++	out[2] = page0.count;
++	out[3] = (unsigned char)(page0.series_id >> 8);
++	out[4] = (unsigned char)(page0.series_id & 0xffU);
++	out[5] = page0.series_data_version;
++	out[6] = page0.flags;
++	out[7] = page0.descriptor_version;
++	out[8] = (unsigned char)(page0.descriptor_ptr >> 8);
++	out[9] = (unsigned char)(page0.descriptor_ptr & 0xffU);
++}
++
++static int microlink_continuous_admit_definition(size_t data_ptr_offset, size_t parsed_end)
++{
++	uint64_t ignored_time;
++	if (!mlink_continuous_definition_range_valid(data_ptr_offset, parsed_end,
++		descriptor_blob_len, sizeof(continuous_definition))
++	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
++		page0.width, descriptor_blob_len, 12U, data_ptr_offset - 12U, &ignored_time)) {
++		continuous_guard_error = 1;
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	if (!continuous_geometry_admitted) {
++		microlink_continuous_geometry_bytes(continuous_geometry);
++		continuous_data_ptr_offset = data_ptr_offset;
++		continuous_definition_len = data_ptr_offset - 12U;
++		memcpy(continuous_definition, descriptor_blob + 12U, continuous_definition_len);
++		continuous_geometry_admitted = 1;
++		return 1;
++	}
++	return microlink_continuous_check_definition();
++}
++
++static int microlink_continuous_check_definition(void)
++{
++	unsigned char current_geometry[16];
++	uint64_t ignored_time;
++	int geometry_ok, dependency_ok, bytes_ok;
++	size_t data_ptr_offset;
++	microlink_continuous_geometry_bytes(current_geometry);
++	data_ptr_offset = ((((size_t)page0.descriptor_ptr) >> 8) * page0.width)
++		+ (((size_t)page0.descriptor_ptr) & 0xffU);
++	geometry_ok = continuous_geometry_admitted
++		&& memcmp(current_geometry, continuous_geometry, sizeof(current_geometry)) == 0
++		&& data_ptr_offset == continuous_data_ptr_offset;
++	dependency_ok = mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
++		page0.width, descriptor_blob_len, 12U, continuous_definition_len, &ignored_time);
++	bytes_ok = mlink_continuous_definition_unchanged(continuous_definition,
++		continuous_definition_len, descriptor_blob + 12U,
++		descriptor_blob_len - 12U, 0U, continuous_definition_len);
++	if (!geometry_ok || !dependency_ok || !bytes_ok) {
++		upsdebugx(1, "apcmicrolink: continuous geometry check failed geometry=%d dependency=%d bytes=%d",
++			geometry_ok, dependency_ok, bytes_ok);
++		continuous_guard_error = 1;
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	return 1;
++}
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
++
+ static int microlink_update_blob(void)
+ {
+ 	unsigned int row;
+@@ -2656,6 +2931,9 @@
+ 		descriptor_blob_len = sizeof(descriptor_blob);
+ 	}
+ 	memset(descriptor_blob, 0, descriptor_blob_len);
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	memset(continuous_blob_pages, 0, sizeof(continuous_blob_pages));
++#endif
+ 
+ 	for (row = 0; row < page0.count; row++) {
+ 		const microlink_object_t *obj = microlink_get_object(row);
+@@ -2680,7 +2958,19 @@
+ 		}
+ 
+ 		memcpy(descriptor_blob + dst, obj->data, copylen);
+-	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		continuous_blob_pages[row] = continuous_object_pages[row];
++		continuous_blob_pages[row].copied_len = copylen;
++		continuous_blob_pages[row].copied_valid = 1;
++#endif
++	}
++
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode && continuous_geometry_admitted
++	 && !microlink_continuous_check_definition()) {
++		return 0;
++	}
++#endif
+ 
+ 	return 1;
+ }
+@@ -2691,30 +2981,63 @@
+ 	uint16_t data_ptr;
+ 	size_t data_ptr_offset;
+ 	size_t data_offset;
++	size_t parsed_end;
+ 
+ 	descriptor_ready = 0;
+ 	descriptor_usage_count = 0;
+ 	descriptor_blob_len = 0;
+ 
+ 	if (!protocol->seen || protocol->len < 12) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode && protocol->seen
++		 && (page0.flags & MLINK_PAGE0_FLAG_DESCRIPTOR_PRESENT) != 0U) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		}
++#endif
+ 		return 0;
+ 	}
+ 
+ 	if (!microlink_update_blob()) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		}
++#endif
+ 		return 0;
+ 	}
+ 
+ 	data_ptr = page0.descriptor_ptr;
+ 	data_ptr_offset = ((((size_t)data_ptr) >> 8) * page0.width) + (((size_t)data_ptr) & 0xFFU);
+ 	if (data_ptr_offset >= descriptor_blob_len || 12 >= descriptor_blob_len) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		}
++#endif
+ 		return 0;
+ 	}
+ 
+ 	data_offset = data_ptr_offset;
+-	if (microlink_parse_descriptor_block(descriptor_blob, descriptor_blob_len, 12, &data_offset, "") == 0) {
++	parsed_end = microlink_parse_descriptor_block(descriptor_blob, descriptor_blob_len, 12, &data_offset, "");
++	if (parsed_end == 0) {
+ 		descriptor_usage_count = 0;
+-		return 0;
+-	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++		}
++#endif
++		return 0;
++	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode && !microlink_continuous_admit_definition(data_ptr_offset, parsed_end)) {
++		descriptor_usage_count = 0;
++		return 0;
++	}
++#endif
+ 
+ 	descriptor_ready = 1;
+ 	upsdebugx(1, "microlink: STABILITY descriptor_ready usages=%zu blob_len=%zu",
+@@ -2758,6 +3081,21 @@
+ 	obj->seen = 1;
+ 	obj->len = datalen;
+ 	memcpy(obj->data, frame + 1, obj->len);
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		uint64_t received_ms;
++		if (!microlink_usb_guard_elapsed_ms(&received_ms)
++		 || received_ms > 119999U) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			continuous_object_pages[id].received_valid = 0;
++		} else {
++			continuous_object_pages[id].received_ms = received_ms;
++			continuous_object_pages[id].received_valid = 1;
++			continuous_object_pages[id].copied_valid = 0;
++		}
++	}
++#endif
+ 
+ 	if (id == MLINK_OBJ_PROTOCOL && obj->len >= 3) {
+ 		page0.version = obj->data[0];
+@@ -2772,6 +3110,16 @@
+ 		page0.descriptor_ptr = (obj->len >= 12)
+ 			? (uint16_t)(((uint16_t)obj->data[10] << 8) | (uint16_t)obj->data[11])
+ 			: 0;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode && continuous_geometry_admitted) {
++			unsigned char current_geometry[16];
++			microlink_continuous_geometry_bytes(current_geometry);
++			if (memcmp(current_geometry, continuous_geometry, sizeof(current_geometry)) != 0) {
++				continuous_guard_error = 1;
++				microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			}
++		}
++#endif
+ 		upsdebugx(2, "microlink: page0 version=%u width=%u pages=%u flags=0x%02X",
+ 			(unsigned int)page0.version,
+ 			(unsigned int)page0.width,
+@@ -3133,6 +3481,9 @@
+ 
+ 	parsed_frames++;
+ 	microlink_cache_object(frame, framelen);
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode && continuous_guard_error) return 0;
++#endif
+ 
+ 	if (page0.count > 0 && frame[0] == (unsigned char)(page0.count - 1U)) {
+ 		if ((page0.flags & MLINK_PAGE0_FLAG_DESCRIPTOR_PRESENT) != 0U) {
+@@ -3142,6 +3493,9 @@
+ 				microlink_parse_descriptor();
+ 			}
+ 		}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode && continuous_guard_error) return 0;
++#endif
+ 
+ 		if ((page0.flags & MLINK_PAGE0_FLAG_AUTH_REQUIRED) != 0U
+ 		 && descriptor_ready && !authentication_sent) {
+@@ -3540,7 +3894,74 @@
+ 		"ups.realpower.nominal", "ups.realpower");
+ 	microlink_publish_scaled_percent("experimental.ups.load.apparent",
+ 		"ups.power.nominal", "ups.power");
+-}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		microlink_continuous_capture_derived();
++	}
++#endif
++}
++
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static void microlink_continuous_capture_derived_one(int percent_index,
++	int nominal_index, int target_index)
++{
++	mlink_continuous_field_t *percent = &continuous_fields[percent_index];
++	mlink_continuous_field_t *nominal = &continuous_fields[nominal_index];
++	mlink_continuous_field_t *target = &continuous_fields[target_index];
++	locale_t c_locale;
++	char *end;
++	double percent_value, nominal_value, derived_value;
++	char wire_value[MLINK_CONTINUOUS_MAX_VALUE + 1U];
++	if (percent->state != MLINK_CONTINUOUS_OBSERVED
++	 || nominal->state != MLINK_CONTINUOUS_OBSERVED
++	 || nominal->kind != MLINK_CONTINUOUS_STATIC
++	 || !mlink_continuous_number_valid(percent->value)
++	 || !mlink_continuous_number_valid(nominal->value)) {
++		mlink_continuous_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	c_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
++	if (c_locale == (locale_t)0) {
++		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	percent_value = strtod_l(percent->value, &end, c_locale);
++	if (end == percent->value || *end != '\0') {
++		freelocale(c_locale);
++		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	nominal_value = strtod_l(nominal->value, &end, c_locale);
++	if (end == nominal->value || *end != '\0') {
++		freelocale(c_locale);
++		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	freelocale(c_locale);
++	if (!isfinite(percent_value) || percent_value < 0.0 || percent_value > 100.0
++	 || !isfinite(nominal_value) || nominal_value <= 0.0) {
++		mlink_continuous_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	derived_value = percent_value * nominal_value / 100.0;
++	if (!isfinite(derived_value)
++	 || snprintf(wire_value, sizeof(wire_value), "%.17g", derived_value) < 0
++	 || !mlink_continuous_number_valid(wire_value)) {
++		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		return;
++	}
++	(void)mlink_continuous_field_observed(target, MLINK_CONTINUOUS_DRIVER_DERIVED,
++		wire_value, percent->observed_ms);
++}
++
++static void microlink_continuous_capture_derived(void)
++{
++	microlink_continuous_capture_derived_one(MLINK_CONT_FIELD_UPS_LOAD,
++		MLINK_CONT_FIELD_REALPOWER_NOMINAL, MLINK_CONT_FIELD_REALPOWER);
++	microlink_continuous_capture_derived_one(MLINK_CONT_FIELD_APPARENT_LOAD,
++		MLINK_CONT_FIELD_POWER_NOMINAL, MLINK_CONT_FIELD_POWER);
++}
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+ 
+ static void microlink_publish_identity(void)
+ {
+@@ -3796,7 +4217,122 @@
+ 
+ 	status_commit();
+ 	alarm_commit();
+-}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		microlink_continuous_capture_status();
++	}
++#endif
++}
++
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static int microlink_continuous_status_token(const char *token, size_t length)
++{
++	static const char *const allowed[] = {
++		"ALARM", "BOOST", "BYPASS", "CAL", "FSD", "HB", "LB", "OB",
++		"OFF", "OL", "OVER", "RB", "TRIM"
++	};
++	size_t i;
++	for (i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
++		if (strlen(allowed[i]) == length && memcmp(allowed[i], token, length) == 0) return 1;
++	}
++	return 0;
++}
++
++static void microlink_continuous_add_status_token(char tokens[13][8], size_t *count,
++	const char *token, size_t length)
++{
++	size_t i, position;
++	char candidate[8];
++	if (!microlink_continuous_status_token(token, length) || length >= sizeof(candidate)) return;
++	memset(candidate, 0, sizeof(candidate));
++	memcpy(candidate, token, length);
++	candidate[length] = '\0';
++	for (i = 0; i < *count; i++) {
++		if (!strcmp(tokens[i], candidate)) return;
++	}
++	if (*count >= 13U) return;
++	position = *count;
++	while (position > 0U && strcmp(tokens[position - 1U], candidate) > 0) {
++		memcpy(tokens[position], tokens[position - 1U], sizeof(tokens[position]));
++		position--;
++	}
++	memcpy(tokens[position], candidate, sizeof(candidate));
++	(*count)++;
++}
++
++static void microlink_continuous_capture_status(void)
++{
++	const microlink_descriptor_usage_t *primary;
++	const microlink_descriptor_usage_t *calibration;
++	const char *status = dstate_getinfo("ups.status");
++	const char *alarm = dstate_getinfo("ups.alarm");
++	char tokens[13][8];
++	char value[129];
++	size_t count = 0, used = 0, i;
++	uint64_t oldest = UINT64_MAX, observed_ms;
++	uint32_t raw;
++	mlink_continuous_field_t *field = &continuous_fields[MLINK_CONT_FIELD_STATUS];
++
++	primary = microlink_find_descriptor_usage_validated("2:4.A");
++	if (primary == NULL || !microlink_get_descriptor_map_bits("2:4.A", &raw)
++	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
++		page0.width, descriptor_blob_len, primary->data_offset, primary->size,
++		&oldest)) {
++		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++		return;
++	}
++	calibration = microlink_find_descriptor_usage("2:13");
++	if (calibration != NULL) {
++		if (calibration->skipped
++		 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
++			page0.width, descriptor_blob_len, calibration->data_offset,
++			calibration->size, &observed_ms)) {
++			mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++			return;
++		}
++		if (observed_ms < oldest) oldest = observed_ms;
++	}
++	if (oldest > 119999U || status == NULL) {
++		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++		return;
++	}
++	while (*status != '\0') {
++		const char *start;
++		size_t length;
++		while (*status == ' ') status++;
++		if (*status == '\0') break;
++		start = status;
++		while (*status != '\0' && *status != ' ') status++;
++		length = (size_t)(status - start);
++	/* The fixed token allowlist intentionally excludes CHRG/DISCHRG. */
++		microlink_continuous_add_status_token(tokens, &count, start, length);
++	}
++	/* NUT alarm strings are private free-form text; export only the fixed token. */
++	if (alarm != NULL && *alarm != '\0') {
++		microlink_continuous_add_status_token(tokens, &count, "ALARM", 5U);
++	}
++	for (i = 0; i < count; i++) {
++		int n = snprintf(value + used, sizeof(value) - used, "%s%s",
++			i == 0U ? "" : " ", tokens[i]);
++		if (n < 0 || (size_t)n >= sizeof(value) - used) {
++			mlink_continuous_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
++			return;
++		}
++		used += (size_t)n;
++	}
++	if (count == 0U) {
++		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++		return;
++	}
++	if (!mlink_continuous_status_valid(value)) {
++		mlink_continuous_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
++		return;
++	}
++	(void)raw;
++	(void)mlink_continuous_field_observed(field, MLINK_CONTINUOUS_REPORTED,
++		value, (uint32_t)oldest);
++}
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+ 
+ static void microlink_publish_runtime(void)
+ {
+@@ -3915,6 +4451,9 @@
+ 	long deadline = 0;
+ 	size_t i;
+ 	uint16_t vid = 0, pid = 0;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	continuous_mode = testvar("monitor_stream_v1");
++#endif
+ 
+ 	/* All option admission precedes factory allocation and any HIDAPI call. */
+ 	if (!testvar("hidapi_shared") || !testvar("guarded_monitor")
+@@ -3940,6 +4479,11 @@
+ 	if (deadline < 1 || deadline > 300) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI guard_deadline must be decimal 1..300");
+ 	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode && deadline != 130) {
++		fatalx(EXIT_FAILURE, "apcmicrolink monitor_stream_v1 requires guard_deadline=130");
++	}
++#endif
+ 	microlink_read_config();
+ 	srand((unsigned int)microlink_now());
+ 	guarded_monitor = 1;
+@@ -3961,6 +4505,11 @@
+ 			mlink_admission_reason_token(diagnostic.reason),
+ 			mlink_admission_parser_token(diagnostic.parser_status));
+ 	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode && !microlink_usb_guard_set_acquisition_seconds(120U)) {
++		fatalx(EXIT_FAILURE, "apcmicrolink monitor_stream_v1 could not set its 120-second acquisition cutoff");
++	}
++#endif
+ 	if (microlink_usb_open() != 1) {
+ 		diagnostic = mlink_shared_admission_diagnostic();
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI one-shot admission failed stage=%s reason=%s parser=%s",
+@@ -4136,6 +4685,26 @@
+ #endif /* WITH_USB */
+ 
+ 	memset(objects, 0, sizeof(objects));
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	memset(continuous_object_pages, 0, sizeof(continuous_object_pages));
++	memset(continuous_blob_pages, 0, sizeof(continuous_blob_pages));
++	memset(continuous_definition, 0, sizeof(continuous_definition));
++	memset(continuous_geometry, 0, sizeof(continuous_geometry));
++	continuous_guard_error = 0;
++	continuous_geometry_admitted = 0;
++	continuous_definition_len = 0;
++	continuous_data_ptr_offset = 0;
++	continuous_last_elapsed_ms = 0;
++	continuous_sequence = 0;
++	continuous_last_slot = 0;
++	continuous_have_slot = 0;
++	continuous_end_reason = MLINK_CONTINUOUS_END_DURATION_COMPLETE;
++	continuous_terminal_latched = 0;
++	continuous_cleanup_done = 0;
++	continuous_cleanup_ok = 0;
++	continuous_cleanup_clock_ok = 0;
++	mlink_continuous_fields_clear(continuous_fields);
++#endif
+ 	session_ready = 0;
+ 	rxbuf_len = 0;
+ 	parsed_frames = 0;
+@@ -4161,6 +4730,16 @@
+ 		microlink_ready = 1;
+ 		while (microlink_ready && !microlink_startup_ready()) {
+ 			time_t now = microlink_now();
++
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++			/* A stream profile cannot recover from a rejected descriptor or
++			 * geometry change. Stop startup immediately instead of cycling
++			 * through the observer's retry path. */
++			if (continuous_mode && continuous_guard_error) {
++				microlink_ready = 0;
++				break;
++			}
++#endif
+ 
+ #ifdef WITH_USB
+ 			if (is_usb && microlink_guard_deadline_expired()) {
+@@ -4252,6 +4831,41 @@
+ 	int good = 0;
+ 	time_t now = microlink_now();
+ 
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		uint64_t elapsed_ms;
++		if (continuous_terminal_latched) return;
++		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++			continuous_guard_error = 1;
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++		continuous_last_elapsed_ms = elapsed_ms;
++		if (elapsed_ms >= 120000U) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
++			return;
++		}
++		if (microlink_usb_guard_expired()) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++		if (microlink_usb_device_gone()) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
++			return;
++		}
++		if (!session_ready) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
++			return;
++		}
++		if (microlink_midsession_timed_out(microlink_now())) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
++			return;
++		}
++		microlink_continuous_clear_dynamic_fields();
++	}
++#endif
++
+ #ifdef WITH_USB
+ 	microlink_guard_probe_require_device_present();
+ #endif /* WITH_USB */
+@@ -4325,6 +4939,39 @@
+ 		good = 1;
+ 	}
+ 
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (continuous_mode) {
++		uint64_t elapsed_ms;
++		if (continuous_guard_error) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++		continuous_last_elapsed_ms = elapsed_ms;
++		if (elapsed_ms >= 120000U) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
++			return;
++		}
++		if (microlink_usb_guard_expired()) {
++			continuous_guard_error = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++		if (microlink_usb_device_gone()) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
++			return;
++		}
++		if (!session_ready) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
++			return;
++		}
++	}
++#endif
++
+ #ifdef WITH_USB
+ 	microlink_guard_probe_require_device_present();
+ #endif /* WITH_USB */
+@@ -4336,6 +4983,12 @@
+ 	microlink_check_auth_result(now);
+ 
+ 	if (!good && microlink_midsession_timed_out(now)) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_SESSION_LOST);
++			return;
++		}
++#endif
+ 		if (!microlink_reconnect_session()) {
+ #ifdef WITH_USB
+ 			microlink_guard_probe_require_device_present();
+@@ -4401,6 +5054,165 @@
+ 	dstate_dataok();
+ }
+ 
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static int microlink_continuous_write_line(const char *line)
++{
++	size_t length;
++	if (line == NULL) return 0;
++	length = strlen(line);
++	if (length == 0U || length > MLINK_CONTINUOUS_MAX_LINE
++	 || fwrite(line, 1U, length, stdout) != length || fflush(stdout) != 0) {
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_OUTPUT_ERROR);
++		return 0;
++	}
++	return 1;
++}
++
++static int microlink_continuous_emit_sample(uint64_t elapsed_ms)
++{
++	char line[MLINK_CONTINUOUS_MAX_LINE + 1U];
++	uint32_t slot, sequence, missed;
++	if (elapsed_ms >= 120000U) return 0;
++	slot = (uint32_t)(elapsed_ms / 5000U);
++	if (slot > 23U || (continuous_have_slot && slot <= continuous_last_slot)) return 0;
++	sequence = continuous_sequence + 1U;
++	if (sequence == 0U || sequence > 24U || slot + 1U < sequence) return 0;
++	missed = slot + 1U - sequence;
++	if (!mlink_continuous_sample_line(line, sizeof(line), sequence, slot,
++		(uint32_t)elapsed_ms, missed, continuous_fields)) {
++		upsdebugx(1, "apcmicrolink: continuous frame rejected by serializer at sequence=%u slot=%u elapsed_ms=%" PRIu64,
++			sequence, slot, elapsed_ms);
++		return 0;
++	}
++	if (!microlink_continuous_write_line(line)) return 0;
++	continuous_sequence = sequence;
++	continuous_last_slot = slot;
++	continuous_have_slot = 1;
++	return 1;
++}
++
++static int microlink_continuous_wait_until(uint64_t target_ms)
++{
++	uint64_t elapsed_ms;
++	struct timeval wait_time;
++	uint64_t wait_ms;
++	if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) return 0;
++	if (elapsed_ms >= target_ms) return 1;
++	wait_ms = target_ms - elapsed_ms;
++	if (wait_ms > 100U) wait_ms = 100U;
++	wait_time.tv_sec = (time_t)(wait_ms / 1000U);
++	wait_time.tv_usec = (suseconds_t)((wait_ms % 1000U) * 1000U);
++#ifdef MLINK_HIDAPI_CONTINUOUS_REPLAY
++	{
++		extern int mlink_continuous_replay_wait(unsigned int wait_ms);
++		if (!mlink_continuous_replay_wait((unsigned int)wait_ms)) return 0;
++	}
++#else
++	if (select(0, NULL, NULL, NULL, &wait_time) < 0 && errno != EINTR) return 0;
++#endif
++	return 1;
++}
++
++int apcmicrolink_continuous_stream_v1_run(void)
++{
++	uint64_t elapsed_ms = 0;
++	uint64_t next_slot_ms;
++	char line[MLINK_CONTINUOUS_MAX_LINE + 1U];
++	int output_ok = 1;
++	int cleanup_ok;
++	int result = 1;
++	if (!continuous_mode) return 1;
++	for (;;) {
++		uint32_t due_slot;
++		if (continuous_terminal_latched) break;
++		if (microlink_guarded_stop_requested()) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
++			break;
++		}
++		if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			break;
++		}
++		continuous_last_elapsed_ms = elapsed_ms;
++		if (elapsed_ms >= 120000U) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
++			break;
++		}
++		if (microlink_usb_guard_expired()) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			break;
++		}
++		if (microlink_usb_device_gone()) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
++			break;
++		}
++		if (!session_ready || continuous_guard_error) {
++			microlink_continuous_latch_end(continuous_guard_error
++				? MLINK_CONTINUOUS_END_GUARD_ERROR : MLINK_CONTINUOUS_END_SESSION_LOST);
++			break;
++		}
++		due_slot = (uint32_t)(elapsed_ms / 5000U);
++		if (!continuous_have_slot || due_slot > continuous_last_slot) {
++			if (continuous_sequence != 0U) {
++				upsdrv_updateinfo();
++				if (continuous_terminal_latched) break;
++				upsdebugx(1, "apcmicrolink: continuous update complete elapsed=%" PRIu64 " guard=%d session=%d",
++					elapsed_ms, continuous_guard_error, session_ready);
++				if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
++					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++					break;
++				}
++				continuous_last_elapsed_ms = elapsed_ms;
++				if (elapsed_ms >= 120000U) {
++					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DURATION_COMPLETE);
++					break;
++				}
++				if (continuous_guard_error || !session_ready) break;
++				if (microlink_guarded_stop_requested()) {
++					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
++					break;
++				}
++			}
++			if (!microlink_continuous_emit_sample(elapsed_ms)) {
++				if (continuous_end_reason != MLINK_CONTINUOUS_END_OUTPUT_ERROR)
++					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++				else output_ok = 0;
++				break;
++			}
++		}
++		next_slot_ms = ((uint64_t)continuous_last_slot + 1U) * 5000U;
++		if (!microlink_continuous_wait_until(next_slot_ms)) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			break;
++		}
++	}
++
++	/* Execute the one ordinary STOP and native finish before claiming a clean
++	 * end record. atexit cleanup is then idempotently skipped for this mode. */
++	upsdrv_cleanup();
++	cleanup_ok = continuous_cleanup_done && continuous_cleanup_ok;
++	if (!cleanup_ok && continuous_end_reason == MLINK_CONTINUOUS_END_DURATION_COMPLETE) {
++		continuous_end_reason = MLINK_CONTINUOUS_END_GUARD_ERROR;
++		continuous_terminal_latched = 1;
++	} else if (!cleanup_ok) {
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++	}
++	if (!continuous_cleanup_clock_ok || continuous_last_elapsed_ms >= 130000U) {
++		output_ok = 0;
++	}
++	if (output_ok && mlink_continuous_end_line(line, sizeof(line),
++		(uint32_t)continuous_last_elapsed_ms,
++		continuous_end_reason)) {
++		output_ok = microlink_continuous_write_line(line);
++	} else {
++		output_ok = 0;
++	}
++	if (cleanup_ok && output_ok
++	 && continuous_end_reason == MLINK_CONTINUOUS_END_DURATION_COMPLETE) result = 0;
++	return result;
++}
++#endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
++
+ void upsdrv_shutdown(void)
+ {
+ 	int ret;
+@@ -4439,6 +5251,9 @@
+ 				hidapi_forbidden_options[i], "Forbidden for the isolated HIDAPI candidate");
+ 		}
+ 	}
++#endif
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	addvar(VAR_FLAG, "monitor_stream_v1", "Opt in to the bounded continuous NDJSON candidate stream");
+ #endif
+ #ifdef WITH_USB
+ 	microlink_usb_addvars();
+@@ -4469,6 +5284,11 @@
+ 
+ void upsdrv_cleanup(void)
+ {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	int continuous_stop_ok = 1;
++	uint64_t cleanup_elapsed_ms;
++	if (continuous_mode && continuous_cleanup_done) return;
++#endif
+ 	/* Close the tunnel behind us. Dropping the connection with a NEXT still
+ 	 * outstanding leaves the device mid-session: it then answers a later
+ 	 * INIT with whatever page its cursor had reached instead of page 0, and
+@@ -4487,9 +5307,17 @@
+ 	 * debug line and nothing more. */
+ 	if (microlink_get_object(MLINK_OBJ_PROTOCOL)->seen) {
+ 		session_ready = 0;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			continuous_stop_ok = microlink_usb_cleanup_stop();
++		} else
++#endif
+ 		if (!microlink_send_simple_raw(MLINK_STOP_BYTE)) {
+ 			upsdebugx(1, "microlink: could not send STOP while closing "
+ 				"the session");
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++			continuous_stop_ok = 0;
++#endif
+ 		}
+ 	}
+ 
+@@ -4497,6 +5325,16 @@
+ 	if (is_usb) {
+ #ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
+ 		microlink_hidapi_finish();
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		if (continuous_mode) {
++			continuous_cleanup_clock_ok = microlink_usb_guard_finish_elapsed_ms(&cleanup_elapsed_ms);
++			if (continuous_cleanup_clock_ok)
++				continuous_last_elapsed_ms = cleanup_elapsed_ms;
++			continuous_cleanup_ok = continuous_stop_ok && continuous_cleanup_clock_ok
++				&& hidapi_finish_status == MLINK_HIDAPI_SESSION_RELEASED;
++			continuous_cleanup_done = 1;
++		}
++#endif
+ #else
+ 		microlink_usb_close();
+ #endif
+diff --git a/drivers/main.c b/drivers/main.c
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -23,6 +23,9 @@
+ 
+ #include "common.h"
+ #include "main.h"
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++extern int apcmicrolink_continuous_stream_v1_run(void);
++#endif
+ #include "nut_stdint.h"
+ #include "nut_float.h"
+ #include "dstate.h"
+@@ -115,6 +118,9 @@
+  * (like NUT driver CLI `-c reload-or-restart` handling), if needed.
+  */
+ static int	reload_flag = 0;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++static int continuous_default_override_seen = 0;
++#endif
+ 
+ #ifndef DRIVERS_MAIN_WITHOUT_MAIN
+ /* Should this driver instance go to background (default)
+@@ -424,6 +430,11 @@
+ 	 * and snmp-ups reading from vartab directly, and overrides
+ 	 * are ignored - so no practical problem to solve right now.
+ 	 */
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (!strncasecmp(var, "override.", 9) || !strncasecmp(var, "default.", 8)) {
++		continuous_default_override_seen = 1;
++	}
++#endif
+ 	if (!strncasecmp(var, "override.", 9)) {
+ 		/* NOTE: No regard for VAR_SENSITIVE here */
+ 		dstate_setinfo(var+9, "%s", val);
+@@ -2404,6 +2415,12 @@
+ 	struct	passwd	*new_uid = NULL;
+ 	int	opt_ret = 0, do_forceshutdown = 0, i;
+ 	int	update_count = 0;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	int continuous_dump_option_count = 0;
++	int continuous_exact_dump_option_count = 0;
++	int continuous_exact_dump_option = 0;
++	int continuous_direct_cli = 0;
++#endif
+ 
+ # ifndef WIN32
+ 	int	cmd = 0;
+@@ -2451,6 +2468,13 @@
+ 				break;
+ 			case 'd':
+ 				dump_data = atoi(optarg);
++				#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++				continuous_dump_option_count++;
++				if (strcmp(optarg, "1") == 0 && optind > 0
++				 && strcmp(argv[optind - 1], "-d1") == 0) {
++					continuous_exact_dump_option_count++;
++				}
++				#endif
+ 				break;
+ 			case 'h':
+ 				/* Avoid notification at exit */
+@@ -2460,6 +2484,10 @@
+ 				break;
+ 		}
+ 	}
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	continuous_exact_dump_option = continuous_dump_option_count == 1
++		&& continuous_exact_dump_option_count == 1;
++#endif
+ 	/* Reset the index, read argv[1] next time (loop below)
+ 	 * https://pubs.opengroup.org/onlinepubs/9699919799/functions/getopt.html
+ 	 */
+@@ -2523,12 +2551,19 @@
+ 	open_syslog(progname);
+ 
+ 	if (!upsdrv_callbacks.banner_is_disabled()) {
++#ifndef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 		upsdrv_banner();
++#endif
+ 	}
+ 
+ 	if (upsdrv_callbacks.upsdrv_info->status == DRV_EXPERIMENTAL) {
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++		fprintf(stderr, "Warning: This is an experimental driver.\n"
++			"Some features may not function correctly.\n\n");
++#else
+ 		printf("Warning: This is an experimental driver.\n");
+ 		printf("Some features may not function correctly.\n\n");
++#endif
+ 	}
+ 
+ 	/* build the driver's extra (-x) variable table */
+@@ -2556,6 +2591,9 @@
+ 
+ 				upsname = optarg;
+ 				upsname_found = 1;
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++				continuous_direct_cli = 1;
++#endif
+ 				break;
+ 			case 'F':
+ 				if (foreground > 0) {
+@@ -2750,6 +2788,20 @@
+ 		fatalx(EXIT_FAILURE, "HIDAPI observation candidate requires guarded_monitor and hidapi_shared");
+ 	}
+ #endif
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++# ifndef WIN32
++	if (!testvar("monitor_stream_v1")) {
++		fatalx(EXIT_FAILURE, "apcmicrolink-hidapi-continuous requires monitor_stream_v1");
++	}
++	if (testvar("monitor_stream_v1")
++	 && (dump_data != 1 || !continuous_exact_dump_option || foreground != 1
++		|| cmd != 0 || do_forceshutdown || oldpid_specified
++		|| !continuous_direct_cli || continuous_default_override_seen
++		|| testvar("ignorelb"))) {
++		fatalx(EXIT_FAILURE, "monitor_stream_v1 requires direct -s CLI mode, exact -d1, foreground, and no commands, overrides/defaults, or ignorelb");
++	}
++# endif /* !WIN32 */
++#endif
+ 	if (testvar("guard_probe_attempts") && !testvar("guarded_monitor")) {
+ 		fatalx(EXIT_FAILURE,
+ 			"guard_probe_attempts requires guarded_monitor");
+@@ -3312,6 +3364,12 @@
+ # ifndef WIN32
+ 	exit_if_guarded_dump_signal_requested();
+ # endif	/* !WIN32 */
++#ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++	if (testvar("monitor_stream_v1")) {
++		int stream_status = apcmicrolink_continuous_stream_v1_run();
++		exit(stream_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
++	}
++#endif
+ 
+ 	/* Register a way to call upsdrv_shutdown() among `sdcommands` */
+ 	dstate_addcmd("shutdown.default");
+diff --git a/drivers/test-apcmicrolink-continuous.c b/drivers/test-apcmicrolink-continuous.c
+--- a/drivers/test-apcmicrolink-continuous.c
++++ b/drivers/test-apcmicrolink-continuous.c
+@@ -0,0 +1,129 @@
++/* Synthetic regression cases for the continuous candidate helper. */
++#include "apcmicrolink-continuous.h"
++
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++
++static void test_numeric_and_status(void)
++{
++	assert(mlink_continuous_number_valid("0"));
++	assert(mlink_continuous_number_valid("-0"));
++	assert(mlink_continuous_number_valid("0.5"));
++	assert(mlink_continuous_number_valid("-12.5e+2"));
++	assert(!mlink_continuous_number_valid(".5"));
++	assert(!mlink_continuous_number_valid("1."));
++	assert(!mlink_continuous_number_valid("00"));
++	assert(!mlink_continuous_number_valid("01.2"));
++	assert(!mlink_continuous_number_valid("+1"));
++	assert(!mlink_continuous_number_valid("1,0"));
++	assert(!mlink_continuous_number_valid("NaN"));
++	assert(!mlink_continuous_number_valid("1e999"));
++	assert(!mlink_continuous_number_valid("1e"));
++	assert(mlink_continuous_status_valid("LB OB"));
++	assert(!mlink_continuous_status_valid("OB LB"));
++	assert(!mlink_continuous_status_valid("OL OB"));
++	assert(!mlink_continuous_status_valid("OB OB"));
++	assert(!mlink_continuous_status_valid("CHRG"));
++	assert(!mlink_continuous_status_valid("CHRG"));
++}
++
++static void test_page_provenance(void)
++{
++	mlink_continuous_page_t object_pages[3] = {
++		{100U, 8U, 1, 1}, {120U, 4U, 1, 1}, {0U, 0U, 0, 0}
++	};
++	mlink_continuous_page_t blob_pages[3];
++	uint64_t oldest = 0;
++	memcpy(blob_pages, object_pages, sizeof(blob_pages));
++	/* Usage straddles pages: use the older timestamp. */
++	assert(mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 6U, 4U, &oldest));
++	assert(oldest == 100U);
++	/* New object bytes do not advance the already-copied blob's timestamp. */
++	object_pages[0].received_ms = 140U;
++	assert(mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 6U, 4U, &oldest));
++	assert(oldest == 100U);
++	/* A rebuilt blob takes the refreshed page timestamp, with its own copy extent. */
++	memcpy(blob_pages, object_pages, sizeof(blob_pages));
++	assert(mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 6U, 4U, &oldest));
++	assert(oldest == 120U);
++	/* A zero-filled, never-received page is not an observed zero. */
++	assert(!mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 16U, 1U, &oldest));
++	/* Short copied page and out-of-range usage fail closed. */
++	blob_pages[1].copied_len = 1U;
++	assert(!mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 6U, 4U, &oldest));
++	assert(!mlink_continuous_page_dependency(blob_pages, 3U, 8U, 24U, 23U, 2U, &oldest));
++}
++
++static void test_definition_and_wire(void)
++{
++	static const unsigned char definition[] = {1U, 2U, 3U, 4U, 0xFFU};
++	static const char *const expected_fields[MLINK_CONTINUOUS_FIELD_COUNT] = {
++		"ups.status", "battery.charge", "battery.runtime", "battery.voltage",
++		"battery.temperature", "ups.temperature", "input.voltage",
++		"input.frequency", "output.voltage", "output.current",
++		"output.frequency", "ups.load", "experimental.ups.load.apparent",
++		"ups.realpower.nominal", "ups.power.nominal", "ups.realpower", "ups.power"
++	};
++	unsigned char changed[sizeof(definition)];
++	mlink_continuous_field_t fields[MLINK_CONTINUOUS_FIELD_COUNT];
++	char line[MLINK_CONTINUOUS_MAX_LINE];
++	size_t i;
++	assert(mlink_continuous_definition_unchanged(definition, sizeof(definition),
++		definition, sizeof(definition), 1U, sizeof(definition)));
++	assert(mlink_continuous_definition_range_valid(20U, 19U, 24U, 32U));
++	assert(!mlink_continuous_definition_range_valid(20U, 21U, 24U, 32U));
++	assert(!mlink_continuous_definition_range_valid(12U, 12U, 24U, 32U));
++	assert(!mlink_continuous_definition_range_valid(25U, 20U, 24U, 32U));
++	assert(!mlink_continuous_definition_range_valid(50U, 20U, 60U, 32U));
++	memcpy(changed, definition, sizeof(definition));
++	changed[3]++;
++	assert(!mlink_continuous_definition_unchanged(definition, sizeof(definition),
++		changed, sizeof(changed), 1U, sizeof(definition)));
++	assert(!mlink_continuous_definition_unchanged(definition, sizeof(definition),
++		definition, sizeof(definition) - 1U, 1U, sizeof(definition)));
++	mlink_continuous_fields_clear(fields);
++	assert(fields[13].kind == MLINK_CONTINUOUS_STATIC);
++	assert(fields[14].kind == MLINK_CONTINUOUS_STATIC);
++	assert(fields[15].kind == MLINK_CONTINUOUS_DRIVER_DERIVED);
++	assert(fields[16].kind == MLINK_CONTINUOUS_DRIVER_DERIVED);
++	assert(mlink_continuous_field_observed(&fields[0], MLINK_CONTINUOUS_REPORTED,
++		"OL", 0U));
++	assert(mlink_continuous_field_observed(&fields[1], MLINK_CONTINUOUS_REPORTED,
++		"0", 0U));
++	assert(mlink_continuous_sample_line(line, sizeof(line), 1U, 0U, 0U, 0U, fields));
++	for (i = 0; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
++		char field_token[80];
++		snprintf(field_token, sizeof(field_token), "\"%s\":{", expected_fields[i]);
++		assert(strstr(line, field_token) != NULL);
++	}
++	assert(strstr(line, "\"value\":\"OL\",\"observed_ms\":0") != NULL);
++	assert(strstr(line, "\"value\":null,\"observed_ms\":null") != NULL);
++	assert(strstr(line, "ups-monitor.continuous.v1") != NULL);
++	assert(!mlink_continuous_sample_line(line, sizeof(line), 2U, 0U, 5000U, 0U, fields));
++	assert(!mlink_continuous_sample_line(line, sizeof(line), 1U, 23U, 0U, 23U, fields));
++	assert(mlink_continuous_sample_line(line, sizeof(line), 2U, 2U, 10000U, 1U, fields));
++	for (i = 0; i < sizeof(line) && line[i] != '\0'; i++) { }
++	assert(i <= MLINK_CONTINUOUS_MAX_LINE && i != 0U && line[i - 1U] == '\n');
++	fields[13].kind = MLINK_CONTINUOUS_REPORTED;
++	assert(!mlink_continuous_sample_line(line, sizeof(line), 3U, 2U, 10000U, 0U, fields));
++	mlink_continuous_fields_clear(fields);
++	assert(mlink_continuous_field_observed(&fields[1], MLINK_CONTINUOUS_REPORTED,
++		"1.0\"}\n", 0U));
++	assert(!mlink_continuous_sample_line(line, sizeof(line), 1U, 0U, 0U, 0U, fields));
++	mlink_continuous_field_unavailable(&fields[4], MLINK_CONTINUOUS_REPORTED);
++	mlink_continuous_field_mirror(&fields[5], &fields[4]);
++	assert(memcmp(&fields[4], &fields[5], sizeof(fields[4])) == 0);
++	mlink_continuous_field_invalid(&fields[4], MLINK_CONTINUOUS_REPORTED);
++	mlink_continuous_field_mirror(&fields[5], &fields[4]);
++	assert(memcmp(&fields[4], &fields[5], sizeof(fields[4])) == 0);
++}
++
++int main(void)
++{
++	test_numeric_and_status();
++	test_page_provenance();
++	test_definition_and_wire();
++	puts("continuous helpers: named synthetic cases passed");
++	return 0;
++}
+diff --git a/drivers/test-replay-continuous-native.c b/drivers/test-replay-continuous-native.c
+--- a/drivers/test-replay-continuous-native.c
++++ b/drivers/test-replay-continuous-native.c
+@@ -0,0 +1,305 @@
++/* Fake-only whole-driver replay host. Never linked into a native candidate. */
++#include "apcmicrolink-hidapi-native.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++typedef struct replay_host {
++	int64_t now_ms;
++	unsigned int init_calls;
++	unsigned int select_calls;
++	unsigned int open_calls;
++	unsigned int close_calls;
++	unsigned int dispose_calls;
++	unsigned int read_calls;
++	unsigned int wait_calls;
++	unsigned int stop_writes;
++	unsigned int init_writes;
++	unsigned int next_writes;
++	unsigned int other_writes;
++	int close_fails;
++	int report_pending;
++	unsigned char report[64];
++} replay_host_t;
++
++static replay_host_t host;
++
++static void report_counters(void)
++{
++	fprintf(stderr,
++		"FAKE_COUNTERS init=%u select=%u open=%u close=%u dispose=%u "
++			"read=%u wait=%u stop=%u init_byte=%u next=%u other_write=%u now_ms=%lld\n",
++		host.init_calls, host.select_calls, host.open_calls, host.close_calls,
++		host.dispose_calls, host.read_calls, host.wait_calls, host.stop_writes, host.init_writes,
++		host.next_writes, host.other_writes, (long long)host.now_ms);
++}
++
++static int fake_ok(void *user)
++{
++	(void)user;
++	return 0;
++}
++
++static int fake_init(void *user)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	state->init_calls++;
++	return 0;
++}
++
++static int fake_select_unique(void *user, unsigned int *selected_count)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	state->select_calls++;
++	*selected_count = 1U;
++	return 0;
++}
++
++static int fake_open(void *user)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	state->open_calls++;
++	return 0;
++}
++
++static int fake_layout(void *user, mlink_shared_layout_t *layout)
++{
++	(void)user;
++	memset(layout, 0, sizeof(*layout));
++	layout->selected_count = 1U;
++	layout->input_report_id = 1U;
++	layout->output_report_id = 2U;
++	layout->input_direction = MLINK_SHARED_INPUT;
++	layout->output_direction = MLINK_SHARED_OUTPUT;
++	layout->input_report_length = 64U;
++	layout->output_report_length = 64U;
++	return 0;
++}
++
++static void queue_page(replay_host_t *state, unsigned char id,
++	const unsigned char data[48])
++{
++	unsigned char frame[51] = {0};
++	unsigned int c0 = 0, c1 = 0;
++	size_t i;
++	frame[0] = id;
++	memcpy(frame + 1U, data, 48U);
++	for (i = 0; i < 49U; i++) {
++		c0 = (c0 + frame[i]) % 255U;
++		c1 = (c1 + c0) % 255U;
++	}
++	frame[49] = (unsigned char)(255U - ((c0 + c1) % 255U));
++	frame[50] = (unsigned char)(255U - ((c0 + frame[49]) % 255U));
++	memset(state->report, 0, sizeof(state->report));
++	state->report[0] = 1U; /* input report ID */
++	memcpy(state->report + 1U, frame, sizeof(frame));
++	state->report_pending = 1;
++}
++
++static void queue_protocol_page(replay_host_t *state, unsigned char flags)
++{
++	unsigned char data[48] = {0};
++	const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++	data[0] = 1U;  /* protocol version */
++	data[1] = 48U; /* data width */
++	data[2] = 3U;  /* page count */
++	data[3] = 0U;
++	data[4] = 1U;  /* series ID */
++	data[5] = 1U;  /* series data version */
++	data[6] = flags; /* descriptor present, no authentication */
++	data[8] = 1U;  /* descriptor version */
++	data[10] = 1U; /* descriptor data pointer: page 1, offset 0 */
++	data[11] = 0U;
++	{
++		static const unsigned char definition[] = {
++			0xF8U, 2U, 0xFEU, 4U, 0x0AU, 0xFEU, 5U,
++			0x20U, 0x9FU, 0x21U, 0x22U, 0xFFU, 0xFEU, 6U,
++			0x25U, 0x27U, 0xFFU, 0xFEU, 7U, 0x25U, 0x26U, 0x27U,
++			0x28U, 0x2AU, 0x2BU, 0x49U, 0xFFU, 0xFFU, 0xFFU, 0xFFU
++		};
++		memcpy(data + 12U, definition, sizeof(definition));
++	}
++	if (scenario != NULL && strcmp(scenario, "bad-descriptor") == 0)
++		data[12U] = 0U;
++	queue_page(state, 0U, data);
++}
++
++static void queue_measurement_page(replay_host_t *state)
++{
++	unsigned char data[48] = {0};
++	static const unsigned char values[] = {
++		0x00U, 0x02U, /* ups.status OL */
++		0x64U, 0x00U, /* battery.charge = 50 percent */
++		0x0EU, 0x10U, /* battery.runtime = 3600 seconds */
++		0x01U, 0x80U, /* battery.voltage = 12 V */
++		0x0CU, 0x80U, /* temperature = 25 C */
++		0x1EU, 0x00U, /* input.voltage = 120 V */
++		0x1EU, 0x00U, /* input.frequency = 60 Hz */
++		0x1EU, 0x00U, /* output.voltage = 120 V */
++		0x00U, 0xA0U, /* output.current = 5 A */
++		0x1EU, 0x00U, /* output.frequency = 60 Hz */
++		0x12U, 0xCCU, /* ups.load = 18.796875 percent */
++		0x03U, 0x84U, /* real power nominal = 900 W */
++		0x04U, 0xB0U, /* power nominal = 1200 VA */
++		0x16U, 0x39U  /* apparent load = 22.22265625 percent */
++	};
++	memcpy(data, values, sizeof(values));
++	queue_page(state, 1U, data);
++}
++
++static void queue_unrelated_page(replay_host_t *state)
++{
++	unsigned char data[48] = {0};
++	memset(data, 0x5a, sizeof(data));
++	queue_page(state, 2U, data);
++}
++
++static ssize_t fake_read(void *user, unsigned char *dst, size_t capacity,
++	unsigned int timeout_ms)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	(void)timeout_ms;
++	state->read_calls++;
++	if (!state->report_pending) {
++		const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++		if (scenario != NULL && strcmp(scenario, "silent") == 0)
++			state->now_ms += 1000;
++		return 0;
++	}
++	if (capacity < sizeof(state->report)) return -1;
++	{
++		const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++		if (scenario != NULL && strcmp(scenario, "late-page") == 0
++		 && state->read_calls == 4U) {
++			state->now_ms += 120000;
++		}
++	}
++	memcpy(dst, state->report, sizeof(state->report));
++	state->report_pending = 0;
++	return (ssize_t)sizeof(state->report);
++}
++
++static ssize_t fake_write(void *user, const unsigned char *src, size_t length)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	unsigned char command;
++	if (length != 64U || src[0] != 2U) return -1;
++	command = src[1];
++	switch (command) {
++	case 0xF7U: state->stop_writes++; break;
++	case 0xFDU: state->init_writes++; queue_protocol_page(state, 0x08U); break;
++	case 0xFEU:
++		state->next_writes++;
++		if (getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO") != NULL
++		 && strcmp(getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO"), "silent") == 0
++		 && state->next_writes > 3U) {
++			fprintf(stderr, "SILENT_NEXT at_ms=%lld\n", (long long)state->now_ms);
++			break;
++		}
++		if (state->next_writes == 1U) {
++			queue_measurement_page(state);
++		} else if (state->next_writes == 2U) {
++			queue_unrelated_page(state);
++		} else {
++			const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++			if (scenario != NULL && strcmp(scenario, "mutate-geometry") == 0
++			 && state->next_writes == 3U)
++				queue_protocol_page(state, 0U);
++			else if (scenario != NULL && strcmp(scenario, "unrelated-refresh") == 0)
++				queue_unrelated_page(state);
++			else
++				queue_measurement_page(state);
++		}
++		break;
++	default: state->other_writes++; break;
++	}
++	return (ssize_t)length;
++}
++
++static int fake_close(void *user)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++	state->close_calls++;
++	if (scenario != NULL && strcmp(scenario, "slow-close") == 0)
++		state->now_ms += 20000;
++	state->close_fails = scenario != NULL && strcmp(scenario, "close-fails") == 0;
++	return state->close_fails ? -1 : 0;
++}
++
++static int fake_stopped(void *user)
++{
++	(void)user;
++	return 0;
++}
++
++static int fake_clock(void *user, int64_t *now_ms)
++{
++	replay_host_t *state = (replay_host_t *)user;
++	*now_ms = state->now_ms;
++	return 0;
++}
++
++static const mlink_shared_host_ops_t fake_ops = {
++	fake_init, fake_ok, fake_select_unique, fake_open, fake_layout,
++	fake_read, fake_write, fake_close, fake_stopped, fake_clock, NULL
++};
++
++int mlink_hidapi_native_create(const mlink_hidapi_native_config_t *config,
++	mlink_hidapi_native_binding_t *binding)
++{
++	if (config == NULL || binding == NULL || binding->ops != NULL) return -1;
++	if (atexit(report_counters) != 0) return -1;
++	binding->ops = &fake_ops;
++	binding->user = &host;
++	return 0;
++}
++
++int mlink_hidapi_native_dispose(mlink_hidapi_native_binding_t *binding)
++{
++	if (binding == NULL || binding->ops != &fake_ops || binding->user != &host
++	 || host.close_fails) return -1;
++	host.dispose_calls++;
++	memset(binding, 0, sizeof(*binding));
++	return 0;
++}
++
++int mlink_hidapi_native_post_finish_clock_ms(int64_t *now_ms)
++{
++	if (now_ms == NULL) return -1;
++	*now_ms = host.now_ms;
++	return 0;
++}
++
++int mlink_continuous_replay_wait(unsigned int wait_ms)
++{
++	const char *scenario = getenv("MLINK_CONTINUOUS_REPLAY_SCENARIO");
++	if (wait_ms > 100U) return 0;
++	host.wait_calls++;
++	if (scenario != NULL && strcmp(scenario, "missed-slots") == 0
++	 && host.wait_calls == 1U) {
++		host.now_ms += 15000;
++		return 1;
++	}
++	host.now_ms += (int64_t)wait_ms;
++	return 1;
++}
++
++time_t time(time_t *result)
++{
++	time_t value = (time_t)(1000000 + host.now_ms / 1000);
++	if (result != NULL) *result = value;
++	return value;
++}
++
++int clock_gettime(clockid_t clock_id, struct timespec *value)
++{
++	int64_t ms = host.now_ms;
++	(void)clock_id;
++	if (value == NULL || ms < 0) return -1;
++	value->tv_sec = (time_t)(1000000 + ms / 1000);
++	value->tv_nsec = (long)(ms % 1000) * 1000000L;
++	return 0;
++}
+diff --git a/tests/test_replay_continuous.py b/tests/test_replay_continuous.py
+--- a/tests/test_replay_continuous.py
++++ b/tests/test_replay_continuous.py
+@@ -0,0 +1,224 @@
++#!/usr/bin/env python3
++"""Whole-NUT main/driver replay against the fake-only native host."""
++
++from __future__ import annotations
++
++import json
++import math
++import os
++import re
++import subprocess
++import sys
++from pathlib import Path
++
++
++FIELD_KINDS = {
++    "ups.status": "reported",
++    "battery.charge": "reported",
++    "battery.runtime": "reported",
++    "battery.voltage": "reported",
++    "battery.temperature": "reported",
++    "ups.temperature": "reported",
++    "input.voltage": "reported",
++    "input.frequency": "reported",
++    "output.voltage": "reported",
++    "output.current": "reported",
++    "output.frequency": "reported",
++    "ups.load": "reported",
++    "experimental.ups.load.apparent": "reported",
++    "ups.realpower.nominal": "static",
++    "ups.power.nominal": "static",
++    "ups.realpower": "driverDerived",
++    "ups.power": "driverDerived",
++}
++EXPECTED_NUMBERS = {
++    "battery.charge": 50.0,
++    "battery.runtime": 3600.0,
++    "battery.voltage": 12.0,
++    "battery.temperature": 25.0,
++    "ups.temperature": 25.0,
++    "input.voltage": 120.0,
++    "input.frequency": 60.0,
++    "output.voltage": 120.0,
++    "output.current": 5.0,
++    "output.frequency": 60.0,
++    "ups.load": 18.796875,
++    "experimental.ups.load.apparent": 22.22265625,
++    "ups.realpower.nominal": 900.0,
++    "ups.power.nominal": 1200.0,
++    "ups.realpower": 169.171875,
++}
++ENVELOPE = {"protocol", "schema_version", "type", "sequence", "slot", "elapsed_ms", "missed_slots", "fields"}
++
++
++def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
++    result: dict[str, object] = {}
++    for key, value in pairs:
++        if key in result:
++            raise AssertionError(f"duplicate JSON key: {key}")
++        result[key] = value
++    return result
++
++
++def reject_constant(value: str) -> None:
++    raise AssertionError(f"non-finite JSON number: {value}")
++
++
++def parse_case(binary: Path, scenario: str | None) -> tuple[int, list[dict[str, object]], str]:
++    env = os.environ.copy()
++    env.pop("MLINK_CONTINUOUS_REPLAY_SCENARIO", None)
++    if scenario:
++        env["MLINK_CONTINUOUS_REPLAY_SCENARIO"] = scenario
++    proc = subprocess.run(
++        [
++            str(binary), "-s", "replay", "-d1",
++            "-x", "port=auto", "-x", "hidapi_shared", "-x", "guarded_monitor",
++            "-x", "guard_vid=0001", "-x", "guard_pid=0002",
++            "-x", "guard_deadline=130", "-x", "guard_probe_attempts=1",
++            "-x", "hid_fallback=no", "-x", "monitor_stream_v1",
++        ],
++        capture_output=True,
++        text=True,
++        encoding="utf-8",
++        timeout=20,
++        env=env,
++        check=False,
++    )
++    assert not proc.stdout or proc.stdout.endswith("\n")
++    lines = proc.stdout.splitlines()
++    records = [
++        json.loads(line, object_pairs_hook=reject_duplicates, parse_constant=reject_constant)
++        for line in lines
++    ]
++    assert all(len(line.encode("utf-8")) <= 8192 for line in lines)
++    assert "Network UPS Tools" not in proc.stdout
++    return proc.returncode, records, proc.stderr
++
++
++def counters(stderr: str) -> dict[str, int]:
++    match = re.search(r"^FAKE_COUNTERS (.+)$", stderr, re.MULTILINE)
++    assert match, stderr
++    return {key: int(value) for key, value in re.findall(r"([a-z_]+)=(-?[0-9]+)", match.group(1))}
++
++
++def assert_sample(record: dict[str, object]) -> None:
++    assert set(record) == ENVELOPE
++    assert record["protocol"] == "ups-monitor.continuous.v1"
++    assert record["schema_version"] == 1
++    assert record["type"] == "sample"
++    fields = record["fields"]
++    assert isinstance(fields, dict) and set(fields) == set(FIELD_KINDS)
++    for name, field in fields.items():
++        assert isinstance(field, dict)
++        assert set(field) == {"value", "observed_ms", "kind", "state"}
++        assert field["kind"] == FIELD_KINDS[name]
++        if field["state"] == "unavailable":
++            assert field["value"] is None and field["observed_ms"] is None
++        assert field["state"] == "observed", (name, field)
++        assert isinstance(field["observed_ms"], int)
++        assert field["observed_ms"] <= record["elapsed_ms"]
++    assert fields["ups.status"]["value"] == "OL"
++    for name, expected in EXPECTED_NUMBERS.items():
++        value = fields[name]["value"]
++        assert isinstance(value, str) and math.isclose(
++            float(value), expected, rel_tol=1e-9, abs_tol=1e-6
++        ), (name, value, expected)
++    for percent_name, nominal_name, target_name in (
++        ("ups.load", "ups.realpower.nominal", "ups.realpower"),
++        ("experimental.ups.load.apparent", "ups.power.nominal", "ups.power"),
++    ):
++        expected = float(fields[percent_name]["value"]) * float(
++            fields[nominal_name]["value"]
++        ) / 100.0
++        actual = float(fields[target_name]["value"])
++        assert math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-9), (
++            target_name, actual, expected
++        )
++    assert fields["battery.temperature"] == fields["ups.temperature"]
++
++
++def main() -> int:
++    if len(sys.argv) != 2:
++        raise SystemExit("usage: test_replay_continuous.py FAKE_REPLAY_BINARY")
++    binary = Path(sys.argv[1]).resolve()
++    assert binary.is_file() and os.access(binary, os.X_OK)
++
++    rc, records, stderr = parse_case(binary, None)
++    assert rc == 0, stderr
++    assert len(records) == 25
++    samples = records[:-1]
++    end = records[-1]
++    assert [record["slot"] for record in samples] == list(range(24))
++    assert [record["sequence"] for record in samples] == list(range(1, 25))
++    assert [record["missed_slots"] for record in samples] == [0] * 24
++    all_sample_times = [record["elapsed_ms"] for record in samples]
++    assert all(isinstance(value, int) and value < 120000 for value in all_sample_times)
++    for record in samples:
++        assert_sample(record)
++    assert set(end) == {"protocol", "schema_version", "type", "elapsed_ms", "reason"}
++    assert end["type"] == "end" and end["elapsed_ms"] == 120000
++    assert end["reason"] == "duration_complete"
++    ordinary = counters(stderr)
++    assert ordinary["init"] == ordinary["select"] == ordinary["open"] == 1
++    assert ordinary["close"] == ordinary["dispose"] == 1
++    assert ordinary["init_byte"] == 1 and ordinary["stop"] == 2
++    assert ordinary["other_write"] == 0 and ordinary["next"] > 0
++
++    rc, records, stderr = parse_case(binary, "missed-slots")
++    assert rc == 0, stderr
++    samples, end = records[:-1], records[-1]
++    assert samples[0]["slot"] == 0 and samples[0]["missed_slots"] == 0
++    assert samples[1]["slot"] == 3 and samples[1]["sequence"] == 2
++    assert samples[1]["missed_slots"] == 2
++    assert end["elapsed_ms"] == 120000 and end["reason"] == "duration_complete"
++    missed = counters(stderr)
++    assert missed["open"] == missed["init_byte"] == 1
++
++    rc, records, stderr = parse_case(binary, "late-page")
++    assert rc == 0, stderr
++    samples, end = records[:-1], records[-1]
++    assert len(samples) == 1 and samples[0]["slot"] == 0
++    assert end["elapsed_ms"] == 125000 and end["reason"] == "duration_complete"
++    late = counters(stderr)
++    assert late["open"] == late["init_byte"] == late["close"] == late["dispose"] == 1
++    assert late["next"] >= 3 and late["other_write"] == 0
++
++    rc, records, stderr = parse_case(binary, "unrelated-refresh")
++    assert rc == 0, stderr
++    samples, end = records[:-1], records[-1]
++    assert len(samples) == 24 and end["elapsed_ms"] == 120000
++    assert_sample(samples[0])
++    assert_sample(samples[1])
++    assert all(field["observed_ms"] == 0 for field in samples[1]["fields"].values())
++    unrelated = counters(stderr)
++    assert unrelated["open"] == unrelated["init_byte"] == 1
++    assert unrelated["next"] > 3 and unrelated["other_write"] == 0
++
++    rc, records, stderr = parse_case(binary, "mutate-geometry")
++    assert rc != 0, stderr
++    samples, end = records[:-1], records[-1]
++    assert len(samples) == 1 and samples[0]["slot"] == 0
++    assert end["reason"] == "guard_error"
++    changed = counters(stderr)
++    assert changed["open"] == changed["init_byte"] == changed["close"] == changed["dispose"] == 1
++    assert changed["next"] == 3 and changed["other_write"] == 0
++
++    rc, records, stderr = parse_case(binary, "close-fails")
++    assert rc != 0, stderr
++    assert records[-1]["type"] == "end" and records[-1]["reason"] == "guard_error"
++    retained = counters(stderr)
++    assert retained["close"] == 1 and retained["dispose"] == 0
++
++    rc, records, stderr = parse_case(binary, "bad-descriptor")
++    assert rc != 0, stderr
++    assert records == [], records
++    rejected = counters(stderr)
++    assert rejected["open"] == rejected["init_byte"] == rejected["close"] == 1
++    assert rejected["dispose"] == 1 and rejected["other_write"] == 0
++
++    print("whole NUT fake replay: telemetry, scheduling, cutoff, geometry, parse and cleanup passed")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

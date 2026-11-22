@@ -1,0 +1,169 @@
+--- backend/nut/process_deadline.py
++++ runtime/process_deadline.py
+@@ -1039,6 +1039,13 @@
+         self.kill_sent = False
+         self.kill_deadline: float | None = None
+         self.cleanup_diagnostic = CleanupDiagnosticParser()
++        self.first_io_transition_error: str | None = None
++        self.first_io_transition = None
++        try:
++            from cleanup_diagnostics import FirstIOTransitionParser
++            self.first_io_transition = FirstIOTransitionParser()
++        except Exception:
++            self.first_io_transition_error = "parser_unavailable"
+ 
+     def abort(self, code: str) -> None:
+         if self.failure is None:
+@@ -1073,6 +1080,12 @@
+             self.hashes[name].update(chunk)
+             if name == "stderr":
+                 self.cleanup_diagnostic.accept(chunk)
++                if self.first_io_transition is not None:
++                    try:
++                        self.first_io_transition.accept(chunk)
++                    except Exception:
++                        self.first_io_transition_error = self.first_io_transition_error or "parser_error"
++                        self.first_io_transition = None
+             if self.counts[name] > _STREAM_MAX_COUNTER - len(chunk):
+                 self.abort("output_counter_overflow")
+                 continue
+@@ -1338,6 +1351,11 @@
+             # result's bytes/hash/EOF and parser state before retaining owner;
+             # late observation can only change live accounting, never this file.
+             _persist_cleanup_diagnostic(output_fd, executable_sha256.lower(), pipes, result)
++            try:
++                _persist_first_io_transition(output_fd, executable_sha256.lower(), pipes, result)
++            except Exception:
++                # This sidecar is diagnostic only; never alter result or ownership.
++                pass
+             if not result.ownership_resolved:
+                 _retained_streaming_owner = (process, pgid, dispatch, pipes, result)
+         elif snapshot is not None and not snapshot.quiesced:
+@@ -1430,6 +1448,127 @@
+                 pass
+ 
+ 
++def _persist_first_io_transition(
++    output_fd: int, native_sha256: str, pipes: _StreamingPipes,
++    result: StreamingRunResult,
++) -> bool:
++    """Best-effort private sidecar for the separate E116 stderr record."""
++    import json
++
++    temporary = ".first-io-transition.json.tmp"
++    final = "first-io-transition.json"
++    descriptor = -1
++    linked = False
++    keep_published = False
++    rollback_identity: tuple[int, int] | None = None
++    created_identity: tuple[int, int] | None = None
++    try:
++        if pipes.first_io_transition_error is not None:
++            diagnostic = {"state": "invalid", "error_code": pipes.first_io_transition_error,
++                          "diagnostic": None}
++        elif pipes.first_io_transition is None:
++            diagnostic = {"state": "invalid", "error_code": "parser_unavailable",
++                          "diagnostic": None}
++        else:
++            diagnostic = pipes.first_io_transition.snapshot(
++                result.stdout_eof and result.stderr_eof)
++        payload = {
++            "schema_version": 1, "kind": "ups-monitor.first-io-transition",
++            **diagnostic, "native_sha256": native_sha256,
++            "stdout_eof": result.stdout_eof, "stderr_eof": result.stderr_eof,
++            "stderr_bytes": result.stderr_bytes, "stderr_sha256": result.stderr_sha256,
++        }
++        data = (json.dumps(payload, ensure_ascii=True, allow_nan=False,
++                           separators=(",", ":")) + "\n").encode("ascii")
++        if (len(data) > 4096 or not 0 <= result.stderr_bytes <= _STREAM_MAX_COUNTER
++                or len(native_sha256) != 64
++                or any(character not in "0123456789abcdef" for character in native_sha256)
++                or len(result.stderr_sha256) != 64
++                or any(character not in "0123456789abcdef" for character in result.stderr_sha256)):
++            return False
++        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL
++                             | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
++                             0o600, dir_fd=output_fd)
++        created = os.fstat(descriptor)
++        created_identity = (created.st_dev, created.st_ino)
++        os.fchmod(descriptor, 0o600)
++        before = os.fstat(descriptor)
++        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
++                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
++                or (before.st_dev, before.st_ino) != created_identity):
++            return False
++        _write_all(descriptor, data)
++        os.fsync(descriptor)
++        after = os.fstat(descriptor)
++        named = os.stat(temporary, dir_fd=output_fd, follow_symlinks=False)
++        if ((before.st_dev, before.st_ino, before.st_uid, before.st_mode, before.st_nlink)
++                != (after.st_dev, after.st_ino, after.st_uid, after.st_mode, after.st_nlink)
++                or after.st_size != len(data)
++                or (after.st_dev, after.st_ino) != (named.st_dev, named.st_ino)):
++            return False
++        os.link(temporary, final, src_dir_fd=output_fd, dst_dir_fd=output_fd,
++                follow_symlinks=False)
++        linked = True
++        rollback_identity = created_identity
++        after_link = os.fstat(descriptor)
++        temporary_after = os.stat(temporary, dir_fd=output_fd, follow_symlinks=False)
++        final_after = os.stat(final, dir_fd=output_fd, follow_symlinks=False)
++        final_identity = (final_after.st_dev, final_after.st_ino)
++        # A swapped temporary can be the actual hard-link source. A final
++        # name observed on its own never conveys ownership of another inode.
++        if ((temporary_after.st_dev, temporary_after.st_ino) == final_identity
++                and temporary_after.st_nlink == final_after.st_nlink == 2):
++            rollback_identity = final_identity
++        if (not stat.S_ISREG(after_link.st_mode) or after_link.st_uid != os.getuid()
++                or stat.S_IMODE(after_link.st_mode) != 0o600 or after_link.st_nlink != 2
++                or (after_link.st_dev, after_link.st_ino) != created_identity
++                or not stat.S_ISREG(temporary_after.st_mode)
++                or temporary_after.st_uid != os.getuid()
++                or stat.S_IMODE(temporary_after.st_mode) != 0o600
++                or temporary_after.st_nlink != 2
++                or (temporary_after.st_dev, temporary_after.st_ino) != created_identity
++                or not stat.S_ISREG(final_after.st_mode)
++                or final_after.st_uid != os.getuid()
++                or stat.S_IMODE(final_after.st_mode) != 0o600
++                or final_after.st_nlink != 2
++                or final_identity != created_identity):
++            return False
++        closing, descriptor = descriptor, -1
++        os.close(closing)
++        keep_published = True
++        return True
++    except Exception:
++        return False
++    finally:
++        if linked and not keep_published and rollback_identity is not None:
++            try:
++                current = os.stat(final, dir_fd=output_fd, follow_symlinks=False)
++                if (current.st_dev, current.st_ino) == rollback_identity:
++                    correlated = True
++                    if rollback_identity != created_identity:
++                        source = os.stat(temporary, dir_fd=output_fd, follow_symlinks=False)
++                        correlated = ((source.st_dev, source.st_ino) == rollback_identity
++                                      and source.st_nlink == current.st_nlink == 2)
++                    confirmed = os.stat(final, dir_fd=output_fd, follow_symlinks=False)
++                    if (correlated and (confirmed.st_dev, confirmed.st_ino) == rollback_identity
++                            and (rollback_identity == created_identity or confirmed.st_nlink == 2)):
++                        os.unlink(final, dir_fd=output_fd)
++            except Exception:
++                pass
++        if created_identity is not None:
++            try:
++                named = os.stat(temporary, dir_fd=output_fd, follow_symlinks=False)
++                if (named.st_dev, named.st_ino) == created_identity:
++                    os.unlink(temporary, dir_fd=output_fd)
++            except Exception:
++                pass
++        if descriptor >= 0:
++            try:
++                os.close(descriptor)
++            except Exception:
++                pass
++
++
+ def retained_streaming_ownership() -> StreamingRunResult | None:
+     """Observe/release the one retained owner, without signals or waiting.
+ 

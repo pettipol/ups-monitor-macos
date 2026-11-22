@@ -1,0 +1,350 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -3166,6 +3166,44 @@
+ 
+ NUT_REPORT_DRIVER([build USB drivers], [${nut_with_usb}], [${nut_usb_lib}],
+ 					[WITH_USB], [Define to enable USB support])
++
++dnl Isolated, uninstalled observation candidate. Never enabled by --with-all.
++NUT_ARG_WITH([apcmicrolink-hidapi], [build the uninstalled Darwin HIDAPI observation candidate (yes|no)], [no])
++AS_CASE([${nut_with_apcmicrolink_hidapi}], [yes|no], [],
++    [AC_MSG_ERROR([--with-apcmicrolink-hidapi accepts only yes or no])])
++AS_IF([test "${nut_with_apcmicrolink_hidapi}" = "yes"], [
++    AS_CASE([${target_os}], [darwin*], [],
++        [AC_MSG_ERROR([the HIDAPI observation candidate requires Darwin])])
++    AS_IF([test "${nut_with_usb}" != "yes" -o "${nut_usb_lib}" != "(libusb-1.0)"],
++        [AC_MSG_ERROR([the HIDAPI candidate requires a real --with-usb=libusb-1.0 configuration for NUT headers; it does not link libusb])])
++    for nut_hidapi_input in \
++        apcmicrolink-hidapi-shared.c apcmicrolink-hidapi-shared-host.h \
++        apcmicrolink-hidapi-session.h \
++        apcmicrolink-hid-descriptor-checked.c apcmicrolink-hid-descriptor-checked.h \
++        apcmicrolink-hidapi-native.c apcmicrolink-hidapi-native.h \
++        hidapi-candidate/hid.c hidapi-candidate/hidapi.h hidapi-candidate/hidapi_darwin.h \
++        hidapi-candidate/licenses/LICENSE.txt hidapi-candidate/licenses/LICENSE-bsd.txt \
++        hidapi-candidate/licenses/LICENSE-orig.txt hidapi-candidate/licenses/LICENSE-gpl3.txt; do
++        AS_IF([test ! -r "${srcdir}/drivers/${nut_hidapi_input}"],
++            [AC_MSG_ERROR([missing staged HIDAPI candidate input: drivers/${nut_hidapi_input}])])
++    done
++    nut_hidapi_save_LIBS="$LIBS"
++    LIBS="-framework IOKit -framework CoreFoundation $LIBS"
++    AC_MSG_CHECKING([whether staged HIDAPI 0.15.0 compiles and links (never run)])
++    AC_LINK_IFELSE([AC_LANG_SOURCE([[
++#include "$srcdir/drivers/hidapi-candidate/hid.c"
++#if HID_API_VERSION_MAJOR != 0 || HID_API_VERSION_MINOR != 15 || HID_API_VERSION_PATCH != 0
++#error HIDAPI 0.15.0 is required
++#endif
++int main(void) {
++    hid_darwin_set_open_exclusive(0);
++    return hid_darwin_get_open_exclusive() + hid_init() + hid_exit();
++}
++    ]])], [AC_MSG_RESULT([yes])],
++        [AC_MSG_RESULT([no]); AC_MSG_ERROR([staged HIDAPI native compile/link probe failed])])
++    LIBS="$nut_hidapi_save_LIBS"
++])
++AM_CONDITIONAL(WITH_APCMICROLINK_HIDAPI, test "${nut_with_apcmicrolink_hidapi}" = "yes")
+ 
+ dnl ----------------------------------------------------------------------
+ dnl checks related to --with-neon
+@@ -4858,6 +4896,8 @@
+ )
+ AC_MSG_RESULT([${nut_enable_shared_private_libs}])
+ AM_CONDITIONAL(ENABLE_SHARED_PRIVATE_LIBS, test "${nut_enable_shared_private_libs}" = "yes"])
++AS_IF([test "${nut_with_apcmicrolink_hidapi}" = "yes" -a "${nut_enable_shared_private_libs}" = "yes"],
++    [AC_MSG_ERROR([the isolated HIDAPI candidate requires --disable-shared-private-libs so its guarded main is compiled per-target])])
+ NUT_REPORT_FEATURE([dynamically link to NUT common libraries instead of copying needed bits into each binary], [${nut_enable_shared_private_libs}], [],
+ 					[ENABLE_SHARED_PRIVATE_LIBS], [Define to dynamically link to NUT common libraries instead of copying needed bits into each binary])
+ 
+--- a/drivers/Makefile.am
++++ b/drivers/Makefile.am
+@@ -241,6 +241,20 @@
+ apcmicrolink_SOURCES += apcmicrolink-usb.c hidparser.c
+ apcmicrolink_LDADD += $(LDADD_DRIVERS_LIBUSB)
+ endif WITH_USB
++if WITH_APCMICROLINK_HIDAPI
++noinst_PROGRAMS = apcmicrolink-hidapi-observe
++apcmicrolink_hidapi_observe_SOURCES = main.c dstate.c apcmicrolink.c apcmicrolink-maps.c apc_common.c \
++	nut-guarded-policy.h apcmicrolink-usb.h \
++	apcmicrolink-hidapi-shared.c apcmicrolink-hidapi-shared-host.h \
++	apcmicrolink-hidapi-session.h \
++	apcmicrolink-hid-descriptor-checked.c apcmicrolink-hid-descriptor-checked.h \
++	apcmicrolink-hidapi-native.c apcmicrolink-hidapi-native.h \
++	hidapi-candidate/hid.c hidapi-candidate/hidapi.h hidapi-candidate/hidapi_darwin.h
++apcmicrolink_hidapi_observe_CFLAGS = $(AM_CFLAGS) \
++	-I$(srcdir) -I$(srcdir)/hidapi-candidate -DMLINK_HIDAPI_NATIVE_CANDIDATE=1
++apcmicrolink_hidapi_observe_LDADD = libdummy_serial.la libdummy_upsdrvquery.la $(LDADD_COMMON) $(SERLIBS)
++apcmicrolink_hidapi_observe_LDFLAGS = $(LDFLAGS) -framework IOKit -framework CoreFoundation
++endif WITH_APCMICROLINK_HIDAPI
+ apcsmart_SOURCES = apcsmart.c apcsmart_tabs.c
+ apcsmart_LDADD = $(LDADD_DRIVERS_SERIAL) $(LIBREGEX_LIBS)
+ apcsmart_old_SOURCES = apcsmart-old.c
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -30,6 +30,13 @@
+ #ifdef WITH_USB
+ #include "apcmicrolink-usb.h"
+ #endif /* WITH_USB */
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++#if !defined(WITH_USB) || !WITH_LIBUSB_1_0 || WITH_LIBUSB_0_1
++#error "The isolated HIDAPI candidate requires the real NUT USB1 configuration"
++#endif
++#include "apcmicrolink-hidapi-native.h"
++#include "apcmicrolink-hidapi-session.h"
++#endif
+ 
+ #define DRIVER_NAME	"APC Microlink protocol driver"
+ #define DRIVER_VERSION	"0.05"
+@@ -262,6 +269,30 @@
+ static int is_usb = 0;
+ static long guarded_deadline_seconds = 0;
+ #endif /* WITH_USB */
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++static int hidapi_auth_write_scope = 0;
++static int hidapi_finish_called = 0;
++static const char *const hidapi_forbidden_options[] = {
++	"vendorid", "productid", "vendor", "product", "serial", "bus", "device", "busport",
++	"allow_duplicates", "usb_set_altinterface", "usb_config_index", "usb_hid_rep_index",
++	"usb_hid_desc_index", "usb_hid_ep_in", "usb_hid_ep_out", "baudrate", "cmdsrc", NULL
++};
++
++static void microlink_hidapi_finish(void)
++{
++	if (hidapi_finish_called) return;
++	hidapi_finish_called = 1;
++	if (mlink_shared_finish_native() == MLINK_HIDAPI_SESSION_RETAINED) {
++		upslogx(LOG_ERR, "apcmicrolink HIDAPI: terminal cleanup retained ownership; no retry");
++	}
++}
++
++static int microlink_hidapi_stop(void *user)
++{
++	(void)user;
++	return nut_guarded_dump_signal_requested();
++}
++#endif
+ static unsigned char rxbuf[MLINK_MAX_FRAME * 2];
+ static size_t rxbuf_len = 0;
+ static unsigned int parsed_frames = 0;
+@@ -2173,6 +2204,15 @@
+ 	const microlink_descriptor_usage_t *usage;
+ 	size_t page;
+ 	size_t offset;
++
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	int sent;
++
++	if (path == NULL || strcmp(path, MLINK_DESC_SLAVE_PASSWORD) != 0
++	 || payload == NULL || payload_len != 4 || hidapi_auth_write_scope) {
++		return 0;
++	}
++#endif
+ 
+ 	usage = microlink_find_descriptor_usage(path);
+ 	if (usage == NULL || usage->skipped || !usage->valid || usage->size == 0
+@@ -2194,8 +2234,16 @@
+ 	upsdebugx(2, "microlink: write %s page=%zu offset=%zu size=%zu",
+ 		path, page, offset, usage->size);
+ 
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	hidapi_auth_write_scope = 1;
++	sent = microlink_send_write((unsigned char)page, (unsigned char)offset,
++		(unsigned char)usage->size, payload);
++	hidapi_auth_write_scope = 0;
++	if (!sent) {
++#else
+ 	if (!microlink_send_write((unsigned char)page, (unsigned char)offset,
+ 		(unsigned char)usage->size, payload)) {
++#endif
+ 		return 0;
+ 	}
+ 
+@@ -2758,6 +2806,10 @@
+ 	unsigned char cb0, cb1;
+ 	size_t framelen = 0;
+ 
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	if (!hidapi_auth_write_scope || len != 4 || data == NULL) return 0;
++#endif
++
+ 	if (microlink_guarded_stop_requested()) {
+ 		return 0;
+ 	}
+@@ -2787,6 +2839,11 @@
+ 
+ static int microlink_send_simple_raw(unsigned char byte)
+ {
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	if (byte != MLINK_STOP_BYTE && byte != MLINK_INIT_BYTE && byte != MLINK_NEXT_BYTE) {
++		return 0;
++	}
++#endif
+ 	microlink_trace_frame(2, "TX ctrl", &byte, 1);
+ 
+ #ifdef WITH_USB
+@@ -3800,6 +3857,9 @@
+ 	char path[64];
+ 
+ 	upsdebug_SET_STARTING(varname, val);
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	return STAT_SET_FAILED;
++#endif
+ 	if (!nut_guard_allows_control(guarded_monitor))
+ 		return STAT_SET_FAILED;
+ 
+@@ -3825,6 +3885,9 @@
+ 	int ret = STAT_INSTCMD_INVALID;
+ 
+ 	upsdebug_INSTCMD_STARTING(cmdname, extra);
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	return STAT_INSTCMD_INVALID;
++#endif
+ 	if (!nut_guard_allows_control(guarded_monitor))
+ 		return STAT_INSTCMD_INVALID;
+ 
+@@ -3842,8 +3905,77 @@
+ 	return STAT_INSTCMD_UNKNOWN;
+ }
+ 
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++static void microlink_hidapi_initups(void)
++{
++	mlink_hidapi_native_config_t config;
++	mlink_admission_diagnostic_t diagnostic;
++	const char *deadline_text = getval("guard_deadline");
++	const char *p;
++	long deadline = 0;
++	size_t i;
++	uint16_t vid = 0, pid = 0;
++
++	/* All option admission precedes factory allocation and any HIDAPI call. */
++	if (!testvar("hidapi_shared") || !testvar("guarded_monitor")
++	 || device_path == NULL || strcasecmp(device_path, "auto")
++	 || !getval("hid_fallback") || strcasecmp(getval("hid_fallback"), "no")
++	 || !getval("guard_probe_attempts") || strcmp(getval("guard_probe_attempts"), "1")
++	 || !nut_guard_hex_id(getval("guard_vid"), &vid) || vid == 0
++	 || !nut_guard_hex_id(getval("guard_pid"), &pid) || pid == 0
++	 || deadline_text == NULL || *deadline_text == '\0') {
++		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI requires hidapi_shared, guarded_monitor, port=auto, hid_fallback=no, guard_probe_attempts=1, nonzero exact guard_vid/guard_pid and guard_deadline");
++	}
++	for (i = 0; hidapi_forbidden_options[i] != NULL; i++) {
++		if (testvar(hidapi_forbidden_options[i])) {
++			fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI refuses alternative option %s", hidapi_forbidden_options[i]);
++		}
++	}
++	for (p = deadline_text; *p; p++) {
++		if (*p < '0' || *p > '9' || deadline > 300) {
++			fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI guard_deadline must be decimal 1..300");
++		}
++		deadline = deadline * 10 + (*p - '0');
++	}
++	if (deadline < 1 || deadline > 300) {
++		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI guard_deadline must be decimal 1..300");
++	}
++	microlink_read_config();
++	srand((unsigned int)microlink_now());
++	guarded_monitor = 1;
++	is_usb = 1;
++	guard_probe_attempt_limit = 1;
++	guarded_deadline_seconds = deadline;
++	memset(&config, 0, sizeof(config));
++	config.vendor_id = vid;
++	config.product_id = pid;
++	config.stop_requested = microlink_hidapi_stop;
++	/* main registers its normal cleanup only AFTER initups returns. */
++	if (atexit(microlink_hidapi_finish) != 0) {
++		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI could not register early cleanup");
++	}
++	if (!mlink_shared_prepare_native(&config, deadline)) {
++		diagnostic = mlink_shared_admission_diagnostic();
++		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI one-shot preparation refused stage=%s reason=%s parser=%s",
++			mlink_admission_stage_token(diagnostic.stage),
++			mlink_admission_reason_token(diagnostic.reason),
++			mlink_admission_parser_token(diagnostic.parser_status));
++	}
++	if (microlink_usb_open() != 1) {
++		diagnostic = mlink_shared_admission_diagnostic();
++		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI one-shot admission failed stage=%s reason=%s parser=%s",
++			mlink_admission_stage_token(diagnostic.stage),
++			mlink_admission_reason_token(diagnostic.reason),
++			mlink_admission_parser_token(diagnostic.parser_status));
++	}
++}
++#endif
++
+ void upsdrv_initups(void)
+ {
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	microlink_hidapi_initups();
++#else
+ 	int use_usb = 0;
+ 	time_t now = microlink_now();
+ #ifdef WITH_USB
+@@ -3934,6 +4066,7 @@
+ 		ser_set_speed(upsfd, device_path, microlink_baudrate);
+ 		ser_set_dtr(upsfd, 1);
+ 	}
++#endif /* MLINK_HIDAPI_NATIVE_CANDIDATE */
+ }
+ 
+ static void microlink_register_outlet_commands(void)
+@@ -4271,6 +4404,11 @@
+ void upsdrv_shutdown(void)
+ {
+ 	int ret;
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	upslogx(LOG_ERR, "apcmicrolink HIDAPI refuses shutdown");
++	set_exit_flag(EF_EXIT_FAILURE);
++	return;
++#endif
+ 	if (!nut_guard_allows_control(guarded_monitor)) {
+ 		upslogx(LOG_ERR, "apcmicrolink: guarded_monitor refuses shutdown");
+ 		set_exit_flag(EF_EXIT_FAILURE);
+@@ -4286,6 +4424,22 @@
+ 
+ void upsdrv_makevartable(void)
+ {
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	size_t i;
++	addvar(VAR_FLAG, "hidapi_shared", "Explicit opt-in to the uninstalled HIDAPI observation candidate");
++	addvar(VAR_FLAG, "guarded_monitor", "Required guarded foreground dump mode");
++	addvar(VAR_VALUE, "guard_vid", "Required nonzero exact four-digit hexadecimal vendor ID");
++	addvar(VAR_VALUE, "guard_pid", "Required nonzero exact four-digit hexadecimal product ID");
++	addvar(VAR_VALUE, "guard_deadline", "Required monotonic observation deadline, decimal 1..300 seconds");
++	for (i = 0; hidapi_forbidden_options[i] != NULL; i++) {
++		/* Register solely to reject explicitly, never to select or tune a device. */
++		if (strcmp(hidapi_forbidden_options[i], "baudrate")
++		 && strcmp(hidapi_forbidden_options[i], "cmdsrc")) {
++			addvar(!strcmp(hidapi_forbidden_options[i], "allow_duplicates") ? VAR_FLAG : VAR_VALUE,
++				hidapi_forbidden_options[i], "Forbidden for the isolated HIDAPI candidate");
++		}
++	}
++#endif
+ #ifdef WITH_USB
+ 	microlink_usb_addvars();
+ 	addvar(VAR_VALUE, "hid_fallback",
+@@ -4341,7 +4495,11 @@
+ 
+ #ifdef WITH_USB
+ 	if (is_usb) {
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++		microlink_hidapi_finish();
++#else
+ 		microlink_usb_close();
++#endif
+ 		return;
+ 	}
+ #endif /* WITH_USB */
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -2744,6 +2744,12 @@
+ 			"Error: specifying '-a id' or '-s id' is now mandatory. Try -h for help.");
+ 	}
+ 
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	/* Reject before any sibling-process signaling, PID handling or driver I/O. */
++	if (!testvar("guarded_monitor") || !testvar("hidapi_shared")) {
++		fatalx(EXIT_FAILURE, "HIDAPI observation candidate requires guarded_monitor and hidapi_shared");
++	}
++#endif
+ 	if (testvar("guard_probe_attempts") && !testvar("guarded_monitor")) {
+ 		fatalx(EXIT_FAILURE,
+ 			"guard_probe_attempts requires guarded_monitor");

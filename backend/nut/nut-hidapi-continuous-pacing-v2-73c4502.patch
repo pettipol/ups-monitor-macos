@@ -1,0 +1,93 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -363,6 +363,12 @@
+ static microlink_descriptor_usage_t descriptor_usages[MLINK_DESCRIPTOR_MAX_USAGES];
+ static unsigned char descriptor_blob[MLINK_DESCRIPTOR_MAX_BLOB];
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++#ifndef MLINK_CONTINUOUS_PACING_V2
++#define MLINK_CONTINUOUS_PACING_V2 0
++#endif
++#if MLINK_CONTINUOUS_PACING_V2 && !defined(MLINK_HIDAPI_NATIVE_CANDIDATE)
++#error "continuous pacing v2 requires the native continuous candidate"
++#endif
+ enum {
+ 	MLINK_CONT_FIELD_STATUS = 0,
+ 	MLINK_CONT_FIELD_BATTERY_CHARGE,
+@@ -5471,6 +5477,7 @@
+ 	return 1;
+ }
+ 
++#if !MLINK_CONTINUOUS_PACING_V2
+ static int microlink_continuous_wait_until(uint64_t target_ms)
+ {
+ 	uint64_t elapsed_ms;
+@@ -5492,11 +5499,11 @@
+ #endif
+ 	return 1;
+ }
++#endif
+ 
+ int apcmicrolink_continuous_stream_v1_run(void)
+ {
+ 	uint64_t elapsed_ms = 0;
+-	uint64_t next_slot_ms;
+ 	char line[MLINK_CONTINUOUS_MAX_LINE + 1U];
+ 	int output_ok = 1;
+ 	int cleanup_ok;
+@@ -5504,6 +5511,9 @@
+ 	if (!continuous_mode) return 1;
+ 	for (;;) {
+ 		uint32_t due_slot;
++#if !MLINK_CONTINUOUS_PACING_V2
++		uint64_t next_slot_ms;
++#endif
+ 		if (continuous_terminal_latched) break;
+ 		if (microlink_guarded_stop_requested()) {
+ 			MLINK_DIAG_SITE("apc_5129");
+@@ -5541,12 +5551,14 @@
+ 			break;
+ 		}
+ 		due_slot = (uint32_t)(elapsed_ms / 5000U);
+-		if (!continuous_have_slot || due_slot > continuous_last_slot) {
+-			if (continuous_sequence != 0U) {
++#if MLINK_CONTINUOUS_PACING_V2
++		if (continuous_sequence != 0U) {
++#else
++		if (continuous_sequence != 0U
++		 && (!continuous_have_slot || due_slot > continuous_last_slot)) {
++#endif
+ 				upsdrv_updateinfo();
+ 				if (continuous_terminal_latched) break;
+-				upsdebugx(1, "apcmicrolink: continuous update complete elapsed=%" PRIu64 " guard=%d session=%d",
+-					elapsed_ms, continuous_guard_error, session_ready);
+ 				if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) {
+ 					MLINK_DIAG_SITE("apc_5162");
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+@@ -5567,6 +5579,12 @@
+ 					microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
+ 					break;
+ 				}
++				due_slot = (uint32_t)(elapsed_ms / 5000U);
++		}
++		if (!continuous_have_slot || due_slot > continuous_last_slot) {
++			if (continuous_sequence != 0U) {
++				upsdebugx(1, "apcmicrolink: continuous update complete elapsed=%" PRIu64 " guard=%d session=%d",
++					elapsed_ms, continuous_guard_error, session_ready);
+ 			}
+ 			if (!microlink_continuous_emit_sample(elapsed_ms)) {
+ 				if (continuous_end_reason != MLINK_CONTINUOUS_END_OUTPUT_ERROR)
+@@ -5577,12 +5595,14 @@
+ 				break;
+ 			}
+ 		}
++#if !MLINK_CONTINUOUS_PACING_V2
+ 		next_slot_ms = ((uint64_t)continuous_last_slot + 1U) * 5000U;
+ 		if (!microlink_continuous_wait_until(next_slot_ms)) {
+ 			MLINK_DIAG_SITE("apc_5185");
+ 			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
+ 			break;
+ 		}
++#endif
+ 	}
+ 
+ 	/* Execute the one ordinary STOP and native finish before claiming a clean

@@ -78,6 +78,91 @@ class BoundedProcessTests(unittest.TestCase):
         self.assertEqual(result.returncode, -signal.SIGKILL)
         self.assertLess(elapsed, 2)
 
+    def cooperative_term_flood_fixture(self, initial_output: bytes = b""):
+        ready = self.parent / "term-handler-ready"
+        marker = self.parent / "atexit-marker"
+        code = f"""
+import atexit, os, signal
+ready = {str(ready)!r}
+marker = {str(marker)!r}
+initial_output = {initial_output!r}
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+atexit.register(lambda: open(marker, "wb").write(b"atexit"))
+def write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+def on_term(signum, frame):
+    write_all(1, b"o" * 262144)
+    write_all(2, b"e" * 262144)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, on_term)
+open(ready, "wb").close()
+if initial_output:
+    os.write(1, initial_output)
+signal.pause()
+"""
+        real_popen = runner.subprocess.Popen
+
+        def launch_when_ready(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            ready_deadline = time.monotonic() + 2
+            while not ready.exists() and time.monotonic() < ready_deadline:
+                time.sleep(0.005)
+            if not ready.exists():
+                process.kill()
+                process.wait()
+                raise AssertionError("synthetic child did not become ready")
+            return process
+        return code, marker, ready, launch_when_ready
+
+    def test_timeout_keeps_pipes_open_and_drains_cooperative_term_output(self) -> None:
+        code, marker, _, launch_when_ready = self.cooperative_term_flood_fixture()
+
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=launch_when_ready):
+            result = self.run_python(code, timeout=0.05, grace=0.5, maximum_output_bytes=1024)
+
+        self.assertEqual(result.status, runner.RunStatus.TIMED_OUT)
+        self.assertEqual(result.trigger, runner.RunTrigger.TIMEOUT)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(marker.read_bytes(), b"atexit")
+        self.assertLessEqual(result.stdout_bytes + result.stderr_bytes, 1024)
+        self.assertEqual((self.output_directory() / "stdout.bin").stat().st_size, result.stdout_bytes)
+        self.assertEqual((self.output_directory() / "stderr.bin").stat().st_size, result.stderr_bytes)
+
+    def test_output_limit_keeps_pipes_open_and_drains_cooperative_term_output(self) -> None:
+        code, marker, _, launch_when_ready = self.cooperative_term_flood_fixture(b"x" * 2048)
+
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=launch_when_ready):
+            result = self.run_python(code, timeout=1, grace=0.5, maximum_output_bytes=1024)
+
+        self.assertEqual(result.status, runner.RunStatus.OUTPUT_LIMIT)
+        self.assertEqual(result.trigger, runner.RunTrigger.OUTPUT_LIMIT)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(marker.read_bytes(), b"atexit")
+        self.assertLessEqual(result.stdout_bytes + result.stderr_bytes, 1024)
+        self.assertEqual((self.output_directory() / "stdout.bin").stat().st_size, result.stdout_bytes)
+        self.assertEqual((self.output_directory() / "stderr.bin").stat().st_size, result.stderr_bytes)
+
+    def test_setup_failure_still_drains_pipes_during_term_grace(self) -> None:
+        code, marker, _, launch_when_ready = self.cooperative_term_flood_fixture()
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=launch_when_ready), \
+             mock.patch.object(runner.os, "set_blocking", side_effect=OSError("synthetic setup failure")):
+            with self.assertRaises(runner.BoundedRunError) as failure:
+                self.run_python(code, timeout=1, grace=0.5, maximum_output_bytes=1024)
+
+        self.assertEqual(failure.exception.code, runner.RunErrorCode.OUTPUT_IO_FAILED)
+        self.assertEqual(marker.read_bytes(), b"atexit")
+
+    def test_keyboard_interrupt_drains_cooperative_term_output_before_reraising(self) -> None:
+        code, marker, _, launch_when_ready = self.cooperative_term_flood_fixture(b"ready-output")
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=launch_when_ready), \
+             mock.patch.object(runner, "_consume_events", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_python(code, timeout=2, grace=0.5, maximum_output_bytes=1024)
+
+        self.assertEqual(marker.read_bytes(), b"atexit")
+
     def test_flood_is_capped_across_both_streams(self) -> None:
         code = "import os\nblock=b'x'*4096\nwhile True:\n os.write(1, block)\n os.write(2, block)"
         result = self.run_python(code, maximum_output_bytes=4096)

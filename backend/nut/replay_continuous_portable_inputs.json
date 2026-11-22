@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "toolchain": {
+    "xcode_version": "27.1",
+    "macos_sdk_version": "27.0",
+    "python_version": "3.15.2"
+  },
+  "nut_revision": "73c4502191d025e35122463986a80c676e734b04",
+  "archive_sha256": "e3ea175565c461a9e741df77dd91103d695b9c60f8d423d9b6ce6c778f98615f",
+  "patches": [
+    {
+      "name": "nut-guarded-monitor-73c4502.patch",
+      "sha256": "b30a046e9b49d917c137b4d59a27bd84798747d05094e3ff6471654e39d5c8ca"
+    },
+    {
+      "name": "nut-hid-fallback-validation-73c4502.patch",
+      "sha256": "80efa7d122e7f8248999a3d5633fcd994f6d1565e283c21afcec4818e45fe68b"
+    },
+    {
+      "name": "nut-guarded-lifecycle-write-73c4502.patch",
+      "sha256": "f80f8012f20494f473a268ef16d65efc71f021de0b615a29a3bb8b34509bcd00"
+    },
+    {
+      "name": "nut-usb-async-state-73c4502.patch",
+      "sha256": "61b80e431a9507cd9ee60b608a8c6290bc3ca9706bf40298121fc26f6958a071"
+    },
+    {
+      "name": "nut-usb-guard-deadline-73c4502.patch",
+      "sha256": "546bc985bd052eb081475f605d917c72b203410a5c1017259a2314db6da88fe1"
+    },
+    {
+      "name": "nut-usb-owner-retention-73c4502.patch",
+      "sha256": "0b788743c7c68cc767b4fbe3a099bbecec6aac73da5adb7b9a0e571e07095766"
+    },
+    {
+      "name": "nut-guarded-startup-stop-73c4502.patch",
+      "sha256": "30c880bb014cdf1f904000d0c8980a5454aeefab8442bbc6f560f03d774ce87f"
+    },
+    {
+      "name": "nut-guarded-reopen-stop-73c4502.patch",
+      "sha256": "250ce19f42caeee51127c063d595858349cb6c8695ca765372abca4c7b26a55f"
+    },
+    {
+      "name": "nut-guarded-probe-attempts-73c4502.patch",
+      "sha256": "e0f2f1c7cb04e59c1ea55ca14f0db0ba59decd6ee6e098f50bcf89b4678ab5c2"
+    },
+    {
+      "name": "nut-hidapi-observe-73c4502.patch",
+      "sha256": "5665093a972b760ea460863cdfefc4f8943065af34da606eeca49cad2bd945d0",
+      "after": {
+        "configure.ac": "c4460862c11dab70f295db6a85d911e153c58c74b800137bdce632f94cd7745a",
+        "drivers/Makefile.am": "23fe8fcf7ee3cc52906b6cef1eab5656fdc6f5d8e367e96d46a833662474bdeb",
+        "drivers/apcmicrolink.c": "d741aca668f078e13e97d701111e40d238455bcb3f831c961d5c0edf60dc9504",
+        "drivers/main.c": "ee3943ff3ce8fca9ef960cf376d31462f96e9ee7935729fbc8e07560be621df5",
+        "drivers/apcmicrolink-usb.h": "b21b39bd218e29706db8a95fca8551f53b2539e507617a5f10e867d6c4f64f29",
+        "drivers/apcmicrolink.h": "be894253a3da4ef956e8327f891c5245b8d958c1696434eaa228b2953f7a2c66",
+        "drivers/nut-guarded-policy.h": "3abba1931d7608c60c4cfa5626ec9fe3b3abfc92b08220b8a15485bb19d5023b"
+      }
+    },
+    {
+      "name": "nut-hidapi-continuous-73c4502.patch",
+      "sha256": "f57a3cebd4cc70701be8d40c3af2484f3bf8a9f5b0c9ddde3af15f58e20e6aa8",
+      "after": {
+        "drivers/apcmicrolink.c": "dc0b5b632883a45850fdfd54594c3abc9987914c8aca2347dfa6e1f8f534d081"
+      }
+    },
+    {
+      "name": "nut-hidapi-continuous-diag-v1-73c4502.patch",
+      "sha256": "dc83e44236dfe91be87dee76f068c5d449cd7c4c32bff25717604f19b2d0b2b5",
+      "after": {
+        "drivers/apcmicrolink.c": "3cfea88fa1424087fb14d6c857a9cd041a636d70e75321034ecda584f779c2bc"
+      }
+    }
+  ],
+  "local_pins": {
+    "process_deadline.py": "e53afffbb3a3525e90a6ca3576a335ea6d797a62b22754218fbde569e138cb7a",
+    "replay_hidapi_full_driver.py": "fb24ebb0e5b9c8a1bb30b8237d2eda60d0da2e9f5091ff882af5599c1145445c",
+    "test_hidapi_full_config.h": "87ffcca2680a21dff59285c28e6910f6245134fbfe8b7034c37f4a106708859b",
+    "test_hidapi_full_version.h": "72c46517ffed4e458472b58b729ea3b893b4081388df35b7bd99a57904b0f512",
+    "test_hidapi_full_os.h": "57b17549b823e2fe56bc4ce7bf0e43ec2501e164c3735423a042bcdcde3afe46",
+    "replay_continuous_diagnostics.c": "5f3e27c0f9d9d117451ff42c3c7aa882c6935d9b0325bab127acbae5cfa1d93b",
+    "test_continuous_diagnostics.py": "6018815a89dd087806b41c12da08a149ac95916c0c39f0b4373389d5c878816a",
+    "continuous_protocol.py": "939d3d351cd0bc36c4ad3101d45f34dda18a5adc3e210666cb306c6e73ceb377",
+    "apcmicrolink-hidapi-shared.c": "a87a7d001b992b7b1cfd1afd96d4432cb5a5d9bfe40550c1877ebd646ba83a21",
+    "apcmicrolink-hidapi-shared-host.h": "606caa96cef85055c68c3b0d7c999e57e24efeb7bac16427dc8836bfd0631dcd",
+    "apcmicrolink-hidapi-session.h": "50104ad0660fbd3c77fa185b0d8e00269f59775a1e123d3b548cb6c86f77d5ae",
+    "apcmicrolink-hidapi-native.c": "3a1205741d62e02871d96c4e3091674b8131e8d3d95e58b156f2f95e9de1d2a5",
+    "apcmicrolink-hidapi-native.h": "648531900d7d2413a59dd36c04e3cd05a3c466ec52062b2e17437cd5b2064ada",
+    "apcmicrolink-hid-descriptor-checked.c": "7db55b980569f8385196d10c30a966b0e78f1f9266c624f05a3c2459d13ebc85",
+    "apcmicrolink-hid-descriptor-checked.h": "65c24b24313ba78c8293ede0485839c496165779f4d87cedde5e882a9f266b52",
+    "nut-guarded-monitor-73c4502.patch": "b30a046e9b49d917c137b4d59a27bd84798747d05094e3ff6471654e39d5c8ca",
+    "nut-hid-fallback-validation-73c4502.patch": "80efa7d122e7f8248999a3d5633fcd994f6d1565e283c21afcec4818e45fe68b",
+    "nut-guarded-lifecycle-write-73c4502.patch": "f80f8012f20494f473a268ef16d65efc71f021de0b615a29a3bb8b34509bcd00",
+    "nut-usb-async-state-73c4502.patch": "61b80e431a9507cd9ee60b608a8c6290bc3ca9706bf40298121fc26f6958a071",
+    "nut-usb-guard-deadline-73c4502.patch": "546bc985bd052eb081475f605d917c72b203410a5c1017259a2314db6da88fe1",
+    "nut-usb-owner-retention-73c4502.patch": "0b788743c7c68cc767b4fbe3a099bbecec6aac73da5adb7b9a0e571e07095766",
+    "nut-guarded-startup-stop-73c4502.patch": "30c880bb014cdf1f904000d0c8980a5454aeefab8442bbc6f560f03d774ce87f",
+    "nut-guarded-reopen-stop-73c4502.patch": "250ce19f42caeee51127c063d595858349cb6c8695ca765372abca4c7b26a55f",
+    "nut-guarded-probe-attempts-73c4502.patch": "e0f2f1c7cb04e59c1ea55ca14f0db0ba59decd6ee6e098f50bcf89b4678ab5c2",
+    "nut-hidapi-observe-73c4502.patch": "5665093a972b760ea460863cdfefc4f8943065af34da606eeca49cad2bd945d0",
+    "nut-hidapi-continuous-73c4502.patch": "f57a3cebd4cc70701be8d40c3af2484f3bf8a9f5b0c9ddde3af15f58e20e6aa8",
+    "nut-hidapi-continuous-diag-v1-73c4502.patch": "dc83e44236dfe91be87dee76f068c5d449cd7c4c32bff25717604f19b2d0b2b5",
+    "replay_continuous_os.c": "59545c130f7c791eced8e4b46f82471f24b5daaad55dfe1c106461ec8a6ce0ae"
+  },
+  "source_after": {
+    "drivers/apcmicrolink-hidapi-native.c": "1fa086f34a5cfe46f987c44b1df6452aea0a979268b6e7724415343bfd743cde",
+    "drivers/apcmicrolink-hidapi-native.h": "03555a828c4d159948b9919a8b7d743400d884725050f82e4513ee68e58cbba8",
+    "drivers/apcmicrolink-hidapi-shared.c": "1f55072542e47bd335dc2aeccca7bb6894b5ab1911e62298acd40c4ad96117d7",
+    "drivers/apcmicrolink-hidapi-shared-host.h": "606caa96cef85055c68c3b0d7c999e57e24efeb7bac16427dc8836bfd0631dcd",
+    "drivers/apcmicrolink-hidapi-session.h": "50104ad0660fbd3c77fa185b0d8e00269f59775a1e123d3b548cb6c86f77d5ae",
+    "drivers/apcmicrolink-hid-descriptor-checked.c": "7db55b980569f8385196d10c30a966b0e78f1f9266c624f05a3c2459d13ebc85",
+    "drivers/apcmicrolink-hid-descriptor-checked.h": "65c24b24313ba78c8293ede0485839c496165779f4d87cedde5e882a9f266b52",
+    "drivers/apcmicrolink.c": "3cfea88fa1424087fb14d6c857a9cd041a636d70e75321034ecda584f779c2bc",
+    "drivers/main.c": "40887c15f634ea963204d2e0060623b5729d1c690103204656475e801219ff06",
+    "drivers/apcmicrolink-continuous.c": "13f0facff36b46e783aad6279f364efcf2151ea0422896dc7098d4c4a40a5094",
+    "drivers/apcmicrolink-continuous.h": "1fd7211d2872211a3ba19f908803e12482462cd628d6912b9798e0103b7adcc8",
+    "drivers/apcmicrolink-usb.h": "3ef32b7ce9836c0497d0d09697f39862a6d018eca9656628eb951ab4b6a2ef5f",
+    "drivers/apcmicrolink.h": "be894253a3da4ef956e8327f891c5245b8d958c1696434eaa228b2953f7a2c66",
+    "drivers/nut-guarded-policy.h": "3abba1931d7608c60c4cfa5626ec9fe3b3abfc92b08220b8a15485bb19d5023b",
+    "drivers/dstate.c": "73ebb9589bf4ed056debc50d2bc164106698d2ebf3f63ef44a23ea3e16018818",
+    "drivers/apcmicrolink-maps.c": "149cf260563294b9c864d9efb35388ed5524f20ce41fac113f10de6f60841a35",
+    "drivers/apc_common.c": "c7cb9f88b2ef4d0fb42e827a09d01fbcd08d7353605496e7da5cb7ee789febcc",
+    "common/common.c": "86458f6fc4aca540c7d5069206418d46e31fb49de8870b06f3f86ad729b64caa",
+    "common/common-nut_version.c": "bb27531ae260d90b2855691dd2d473105697608b06ebb95c053241dbbeaf51ea",
+    "common/state.c": "d7e43db9bbd967228a88bc4d92a990d1cea201a04b35244e0f057f5b3e7ffa75",
+    "common/str.c": "2373a99660865c8468ae777deb0aafd994ac6e105ea51fee2eaeeaed56fcbc93",
+    "common/upsconf.c": "8dc8781c99b753d33d00756def5363dd3760c650af80da15135a4a128ba3c175",
+    "common/parseconf.c": "4a0f99d732037a2a0e31e024f771d044e75bfe209737e46f5adb873c2d0c939d"
+  },
+  "sentinel_provenance": {
+    "source": "test_hidapi_full_driver.c",
+    "sha256": "6bac2210acb2c664343bfed25b76da7d8df23122a3058ed6f930d1c7f9506dc2",
+    "reuse": "OS/serial/query bodies only; forbidden writes stderr and exits125; privilege lookups/change and chdir are suppressed"
+  }
+}

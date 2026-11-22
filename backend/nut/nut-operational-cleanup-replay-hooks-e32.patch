@@ -1,0 +1,22 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -5001,6 +5001,9 @@
+ 			operational_startup_failed = 1;
+ 			microlink_continuous_latch_end(microlink_guarded_stop_requested()
+ 				? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++			mlink_operational_replay_checkpoint(MLINK_REPLAY_PRE_OPEN_TERMINAL);
++#endif
+ 			return;
+ 		}
+ #endif
+@@ -5918,6 +5921,9 @@
+ 	/* The reviewed guard supplies its checked post-disposal clock here.
+ 	 * Never substitute a pre-cleanup time for the terminal record. */
+ 	clock_ok=mlink_shared_operational_elapsed(&elapsed_ms);
++#ifdef MLINK_OPERATIONAL_REPLAY_HOOKS
++	mlink_operational_replay_cleanup_results(&stop_ok,&released,&complete,&clock_ok);
++#endif
+ 	if (clock_ok) continuous_last_elapsed_ms=elapsed_ms;
+ 	continuous_cleanup_clock_ok=clock_ok;
+ 	operational_cleanup_ok=stop_ok && released && complete && clock_ok;

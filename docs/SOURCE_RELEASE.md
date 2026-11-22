@@ -8,6 +8,37 @@ commit and creates any tag or release only after the relevant acceptance
 checks. A source-only preview is not an app release, a signed or notarized
 binary, or evidence of hardware compatibility.
 
+## Preparing an app from an extracted source archive
+
+The app packaging tool enumerates its source files through Git. A downloaded
+source tar has no repository metadata. Verify its checksum and extract it into
+a new private temporary directory with the standard file modes (umask 022
+inside a private 0700 parent). Set `CHECKOUT_ROOT` to the extracted source
+root containing `Package.swift`. If you are already using a normal clone, use
+that clone directly and skip the following commands.
+
+```sh
+(
+  set -eu
+  cd "$CHECKOUT_ROOT"
+  test -f Package.swift
+  test -f scripts/prepare_synthetic_source.py
+  test ! -e .git
+  test ! -L .git
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  git init --quiet --template=
+  git config --local core.excludesFile /dev/null
+)
+```
+
+This creates local metadata only in the extracted copy. No commit, remote
+or account is needed. The source preparation receipt lists every selected
+input. Compare those paths and hashes to the reviewed source package before
+building. The [frozen helper](FROZEN_BUILD_RECIPE.md) and [real preview
+procedure](REAL_PREVIEW_PACKAGE.md) describe the separate upstream and
+toolchain inputs.
+
 ## Create
 
 From the repository root, select the reviewed full commit explicitly. Use a
@@ -27,7 +58,7 @@ test "$(git rev-parse --verify "$FULL_COMMIT^{commit}")" = "$FULL_COMMIT"
 test ! -e "$OUTPUT_DIR"
 mkdir -m 700 "$OUTPUT_DIR"
 
-git archive --format=tar \
+git -c tar.umask=0022 archive --format=tar \
   --prefix='ups-monitor-macos-0.1.0-preview.1/' \
   "$FULL_COMMIT" | gzip -n > "$OUTPUT_DIR/$ARCHIVE"
 
@@ -35,10 +66,11 @@ git archive --format=tar \
 ```
 
 Record the full commit hash, `VERSION`, archive SHA-256, and Git and gzip
-implementations/versions used. `gzip -n` omits the original filename and
-timestamp from the gzip header; it does not promise byte-identical compressed
-output across different gzip implementations or versions. Reproduction of the
-same archive bytes requires the same commit, commands, and tool versions.
+implementations and versions used. The explicit Git archive mask gives ordinary
+files mode `0644` and executables mode `0755` regardless of the maintainer's
+configured `tar.umask`. `gzip -n` omits the original filename and timestamp
+from the gzip header. Use the same commit, commands and tool versions when
+reproducing the archive bytes.
 
 The archive contains the tracked project tree, including code, documentation,
 tests, fixtures and notices. It does not include `.git` metadata or ignored or

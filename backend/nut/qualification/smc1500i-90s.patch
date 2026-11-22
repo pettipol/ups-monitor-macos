@@ -1,0 +1,112 @@
+--- canonical/managed_operational_entrypoint.py
++++ h12/managed_operational_entrypoint.py
+@@ -13,6 +13,7 @@
+ import stat
+ import sys
+ import threading
++import time
+ from typing import Any, Callable
+ import uuid
+ 
+@@ -30,6 +31,8 @@
+     "cleanup_diagnostics.py",
+ })
+ MAX_RECEIPT_BYTES = 65_536
++# H12 qualification variant: fixed, no CLI/environment switch.
++H12_FUSE_SECONDS = 90.0
+ STOP_REQUESTED = False
+ _CONTROL_REASONS = {"stop", "app_disconnected", "invalid_control", "signal", "control_failed"}
+ _ADAPTER_ERRORS = {
+@@ -182,16 +185,68 @@
+         and result.capture_result.ownership_resolved)
+ 
+ 
++def _h12_record(workspace: Path, fired: bool, control_reason: str | None) -> None:
++    """One exclusive qualification receipt in the existing private workspace."""
++    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
++    root = os.open(workspace, flags)
++    try:
++        info = os.fstat(root)
++        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
++            raise ValueError("h12_workspace")
++        raw = (json.dumps({"schema": 1, "fired": fired, "control_reason": control_reason},
++                          sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
++        fd = os.open("h12-fuse-status.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL |
++                     os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), 0o600, dir_fd=root)
++        try:
++            view = memoryview(raw)
++            while view:
++                count = os.write(fd, view)
++                if count <= 0:
++                    raise OSError("h12_receipt_write")
++                view = view[count:]
++            os.fsync(fd)
++        finally:
++            os.close(fd)
++        os.fsync(root)
++    finally:
++        os.close(root)
++
++
+ def serve(adapter: Any, profile: Any, workspace: Path, launch_id: str, *,
+           writer: Callable[[dict[str, object]], None] = emit,
+           barrier: Callable[[], None] = retain) -> int:
+     result = None
+     admission_rejected = False
++    deadline = time.monotonic() + H12_FUSE_SECONDS
++    fired = threading.Event()
++    capture_called = False
+ 
+     def capture(*args, **kwargs):
++        nonlocal capture_called
++        if capture_called:
++            raise RuntimeError("h12_second_capture_rejected")
++        capture_called = True
++        cancel = kwargs["cancel_event"]
++        def expire() -> None:
++            fired.set()
++            cancel.set()
+         if STOP_REQUESTED:
+-            kwargs["cancel_event"].set()
+-        return adapter.capture_operational(*args, **kwargs)
++            cancel.set()
++        remaining = deadline - time.monotonic()
++        if remaining <= 0:
++            expire()
++            raise TimeoutError("h12_deadline_before_capture")
++        timer = threading.Timer(remaining, expire)
++        try:
++            timer.start()
++            if fired.is_set() or time.monotonic() >= deadline:
++                expire()
++                raise TimeoutError("h12_deadline_before_capture")
++            return adapter.capture_operational(*args, **kwargs)
++        finally:
++            timer.cancel()
++            if timer.ident is not None:
++                timer.join(2.0)
+ 
+     try:
+         candidate = adapter.run_app_controlled_operational(
+@@ -203,6 +258,12 @@
+         admission_rejected = True
+     except BaseException:
+         pass
++    record_failed = False
++    if capture_called:
++        try:
++            _h12_record(workspace, fired.is_set(), result.control_reason if result is not None else None)
++        except BaseException:
++            record_failed = True
+     quiet = _quiet_workers()
+     receipt = asdict(result) if result is not None else {
+         "capture_result": None, "control_reason": None, "adapter_error": "capture_failed",
+@@ -223,7 +284,7 @@
+     if must_retain:
+         barrier()
+     # Measurement state remains in the nested receipt, independent of cleanup.
+-    return 0 if resolved else 2
++    return 0 if resolved and not record_failed else 2
+ 
+ 
+ def main() -> int:

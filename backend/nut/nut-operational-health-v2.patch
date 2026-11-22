@@ -1,0 +1,841 @@
+--- a/drivers/apcmicrolink-hidapi-shared.c
++++ b/drivers/apcmicrolink-hidapi-shared.c
+@@ -5,6 +5,7 @@
+  */
+ #include <apcmicrolink-usb.h>
+ #include "apcmicrolink-hidapi-shared-host.h"
++#include "apcmicrolink-hidapi-session.h"
+ 
+ #if defined(MLINK_HIDAPI_NATIVE_CANDIDATE) && defined(MLINK_HIDAPI_SHARED_TEST)
+ #error "MLINK_HIDAPI_NATIVE_CANDIDATE and MLINK_HIDAPI_SHARED_TEST are mutually exclusive"
+@@ -52,10 +53,46 @@
+ 	unsigned char report[REPORT_SIZE];
+ 	size_t report_pos;
+ 	size_t report_end;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	mlink_health_phase_t health_phase;
++	mlink_health_reason_t health_reason;
++	int cleanup_failed;
++	int cleanup_deadline_valid;
++	int64_t cleanup_deadline_ms;
++	uint64_t publications;
++	uint64_t minimum_observed_ms;
++#endif
+ } shared_state_t;
+ 
+ static shared_state_t state;
+ 
++/* The guard is cooperative, not a hard deadline for blocking OS calls. Never
++ * defer release on a missed deadline; retain failure while releasing once. */
++static void mark_terminal(void)
++{
++	state.terminal = 1;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (state.health_phase == MLINK_HEALTH_STARTING
++	 || state.health_phase == MLINK_HEALTH_ACTIVE) {
++		int64_t now;
++		state.health_phase = MLINK_HEALTH_CLEANING;
++		if (state.health_reason == MLINK_HEALTH_NONE)
++			state.health_reason = MLINK_HEALTH_IO;
++		if (state.ops == NULL || state.ops->monotonic_ms == NULL
++		 || state.ops->monotonic_ms(state.user, &now) != 0 || now < 0
++		 || (state.have_clock && now < state.last_clock_ms)
++		 || now > INT64_MAX - 2000) {
++			state.cleanup_failed = 1;
++			return;
++		}
++		state.have_clock = 1;
++		state.last_clock_ms = now;
++		state.cleanup_deadline_ms = now + 2000;
++		state.cleanup_deadline_valid = 1;
++	}
++#endif
++}
++
+ static void record_diagnostic(mlink_admission_stage_t stage,
+ 	mlink_admission_reason_t reason, mlink_admission_parser_status_t parser_status)
+ {
+@@ -161,15 +198,23 @@
+ {
+ 	if (state.ops == NULL || state.ops->monotonic_ms == NULL
+ 	 || state.ops->monotonic_ms(state.user, now) != 0 || *now < 0) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (state.health_phase != MLINK_HEALTH_DISABLED && state.health_reason == MLINK_HEALTH_NONE)
++			state.health_reason = MLINK_HEALTH_CLOCK;
++#endif
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_CLOCK_FAILED, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.have_clock && *now < state.last_clock_ms) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (state.health_phase != MLINK_HEALTH_DISABLED && state.health_reason == MLINK_HEALTH_NONE)
++			state.health_reason = MLINK_HEALTH_CLOCK;
++#endif
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_CLOCK_REGRESSION, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.have_clock = 1;
+@@ -182,31 +227,73 @@
+ 	if (state.ops == NULL || state.ops->stop_requested == NULL) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_CALLBACK_MISSING, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 1;
+ 	}
+ 	if (state.ops->stop_requested(state.user) != 0) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_STOP, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 1;
+ 	}
+ 	return 0;
+ }
+ 
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++/* Validate every sampled STARTING/ACTIVE time before deriving a lease result.
++ * CLEANING and later phases intentionally have no ordinary-operation deadline. */
++static int health_sample_before_deadline(int64_t now)
++{
++	if (state.health_phase != MLINK_HEALTH_STARTING
++	 && state.health_phase != MLINK_HEALTH_ACTIVE)
++		return 1;
++	if (now < state.deadline_ms)
++		return 1;
++	if (state.health_reason == MLINK_HEALTH_NONE)
++		state.health_reason = state.health_phase == MLINK_HEALTH_STARTING
++			? MLINK_HEALTH_STARTUP_DEADLINE : MLINK_HEALTH_PROGRESS_DEADLINE;
++	mark_terminal();
++	return 0;
++}
++#endif
++
+ static int usable(void)
+ {
+ 	int64_t now;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (state.health_phase != MLINK_HEALTH_DISABLED) {
++		if (state.terminal || state.health_phase >= MLINK_HEALTH_CLEANING) {
++			mark_terminal();
++			return 0;
++		}
++		if (stopped()) {
++			if (state.health_reason == MLINK_HEALTH_IO)
++				state.health_reason = MLINK_HEALTH_STOP;
++			return 0;
++		}
++		if (!clock_now(&now)) {
++			state.health_reason = MLINK_HEALTH_CLOCK;
++			return 0;
++		}
++		if ((uint64_t)(now - state.guard_start_ms) > MLINK_OPERATIONAL_MAX_ELAPSED) {
++			state.health_reason = MLINK_HEALTH_OVERFLOW;
++			mark_terminal();
++			return 0;
++		}
++		if (!health_sample_before_deadline(now)) return 0;
++		return 1;
++	}
++#endif
+ 	if (!state.guard_started) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.guard_invalid) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_INVALID_GUARD, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.terminal) {
+@@ -219,7 +306,7 @@
+ 			record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 				MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		}
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!clock_now(&now) || state.terminal) {
+@@ -227,20 +314,20 @@
+ 			record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 				MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		}
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (now >= state.deadline_ms) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.acquisition_set && now >= state.acquisition_deadline_ms) {
+ 		state.acquisition_expired = 1;
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	return 1;
+@@ -251,8 +338,11 @@
+ 	int64_t now;
+ 	int64_t remaining;
+ 	if (!usable() || !clock_now(&now)) return 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (!health_sample_before_deadline(now)) return 0;
++#endif
+ 	remaining = state.deadline_ms - now;
+-	if (remaining <= 0) { state.terminal = 1; return 0; }
++	if (remaining <= 0) { mark_terminal(); return 0; }
+ 	return remaining > 300000 ? 300000U : (unsigned int)remaining;
+ }
+ 
+@@ -264,12 +354,19 @@
+ 	}
+ 	state.close_called = 1;
+ 	if (state.ops == NULL || state.ops->close == NULL) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return;
+ 	}
+ 	rc = state.ops->close(state.user);
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (state.health_phase == MLINK_HEALTH_CLEANING) {
++		int64_t now;
++		if (rc != 0 || !state.cleanup_deadline_valid || !clock_now(&now)
++		 || now >= state.cleanup_deadline_ms) state.cleanup_failed = 1;
++	}
++#endif
+ 	if (rc != 0) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return;
+ 	}
+ 	state.close_pending = 0;
+@@ -293,13 +390,13 @@
+ {
+ 	int rc;
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (fn == NULL) {
+ 		record_diagnostic(stage, MLINK_ADMISSION_REASON_CALLBACK_MISSING,
+ 			MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	api_enter();
+@@ -309,11 +406,11 @@
+ 	}
+ 	api_leave();
+ 	if (rc != 0) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	return 1;
+@@ -334,12 +431,12 @@
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_INVALID_GUARD, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		state.guard_invalid = 1;
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!clock_now(&now)) {
+ 		state.guard_invalid = 1;
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.guard_start_ms = now;
+@@ -347,7 +444,7 @@
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 			MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		state.guard_invalid = 1;
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.deadline_ms = now + (int64_t)seconds * 1000;
+@@ -360,6 +457,118 @@
+ 	return !usable();
+ }
+ 
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++int mlink_shared_operational_begin(void)
++{
++	if (state.guard_started || state.attempted || state.terminal
++	 || state.health_phase != MLINK_HEALTH_DISABLED) return 0;
++	if (!microlink_usb_guard_begin(35)) return 0;
++	state.health_phase = MLINK_HEALTH_STARTING;
++	return usable();
++}
++
++int mlink_shared_operational_published(uint64_t minimum_observed_elapsed_ms)
++{
++	int64_t now;
++	uint64_t elapsed;
++	if (state.health_phase == MLINK_HEALTH_DISABLED || !usable()) return 0;
++	if (!state.admitted || !state.opened || state.in_api || !clock_now(&now)) {
++		mark_terminal();
++		return 0;
++	}
++	elapsed = (uint64_t)(now - state.guard_start_ms);
++	if (!health_sample_before_deadline(now)) return 0;
++	if (elapsed > MLINK_OPERATIONAL_MAX_ELAPSED
++	 || now > INT64_MAX - 15000 || state.publications == MLINK_OPERATIONAL_MAX_ELAPSED) {
++		state.health_reason = MLINK_HEALTH_OVERFLOW;
++		mark_terminal();
++		return 0;
++	}
++	if (minimum_observed_elapsed_ms > elapsed
++	 || (state.publications != 0 && minimum_observed_elapsed_ms <= state.minimum_observed_ms)) {
++		state.health_reason = MLINK_HEALTH_REFRESH;
++		mark_terminal();
++		return 0;
++	}
++	state.minimum_observed_ms = minimum_observed_elapsed_ms;
++	state.publications++;
++	state.deadline_ms = now + 15000;
++	state.health_phase = MLINK_HEALTH_ACTIVE;
++	return 1;
++}
++
++int mlink_shared_operational_elapsed(uint64_t *elapsed_ms)
++{
++	int64_t now;
++	if ((state.health_phase == MLINK_HEALTH_STARTING
++	 || state.health_phase == MLINK_HEALTH_ACTIVE) && !usable()) return 0;
++	if (elapsed_ms == NULL || state.health_phase == MLINK_HEALTH_DISABLED) return 0;
++	if (state.ops == NULL && (state.health_phase == MLINK_HEALTH_CLEANING
++	 || state.health_phase == MLINK_HEALTH_FINISHED)) {
++		/* Native disposal has already captured the final monotonic observation. */
++		if (!state.finish_clock_valid || state.finish_clock_ms < state.last_clock_ms
++		 || state.finish_clock_ms < state.guard_start_ms) return 0;
++		now = state.finish_clock_ms;
++	} else {
++		if (!clock_now(&now) || now < state.guard_start_ms) return 0;
++		if (!health_sample_before_deadline(now)) return 0;
++	}
++	if ((uint64_t)(now - state.guard_start_ms) > MLINK_OPERATIONAL_MAX_ELAPSED) {
++		if (!(state.ops == NULL && (state.health_phase == MLINK_HEALTH_CLEANING
++			|| state.health_phase == MLINK_HEALTH_FINISHED))) {
++			if (state.health_reason == MLINK_HEALTH_NONE)
++				state.health_reason = MLINK_HEALTH_OVERFLOW;
++			mark_terminal();
++		}
++		return 0;
++	}
++	*elapsed_ms = (uint64_t)(now - state.guard_start_ms);
++	return 1;
++}
++
++void mlink_shared_operational_stop(void)
++{
++	if (state.health_phase == MLINK_HEALTH_DISABLED) return;
++	if (state.health_reason == MLINK_HEALTH_NONE) state.health_reason = MLINK_HEALTH_STOP;
++	mark_terminal();
++}
++
++void mlink_shared_operational_fail(void)
++{
++	if (state.health_phase != MLINK_HEALTH_DISABLED) mark_terminal();
++}
++
++int mlink_shared_operational_cleanup_complete(void)
++{
++	int64_t now;
++	int clock_valid;
++	if (state.health_phase != MLINK_HEALTH_CLEANING) return 0;
++	if (state.ops != NULL) clock_valid = clock_now(&now);
++	else {
++		now = state.finish_clock_ms;
++		clock_valid = state.finish_clock_valid && now >= state.last_clock_ms;
++	}
++	if (!state.cleanup_deadline_valid || !clock_valid
++	 || now >= state.cleanup_deadline_ms) state.cleanup_failed = 1;
++	if (state.opened || state.opening || state.in_api || state.close_pending)
++		return 0;
++#ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++	/* A closed handle is not released native ownership. Failed or deferred
++	 * disposal must remain unresolved even when all host calls returned. */
++	if (native_prepare_attempted && state.ops != NULL) return 0;
++#endif
++	state.health_phase = MLINK_HEALTH_FINISHED;
++	return !state.cleanup_failed;
++}
++
++mlink_health_snapshot_t mlink_shared_operational_snapshot(void)
++{
++	mlink_health_snapshot_t result = {state.health_phase, state.health_reason,
++		state.cleanup_failed, state.cleanup_stop_attempted, state.publications};
++	return result;
++}
++#endif
++
+ int microlink_usb_guard_elapsed_ms(uint64_t *elapsed_ms)
+ {
+ 	int64_t now;
+@@ -373,7 +582,7 @@
+ 		if (!state.terminal) {
+ 			record_diagnostic(MLINK_ADMISSION_STAGE_GUARD,
+ 				MLINK_ADMISSION_REASON_DEADLINE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-			state.terminal = 1;
++			mark_terminal();
+ 		}
+ 	}
+ 	return 1;
+@@ -392,6 +601,9 @@
+ int microlink_usb_guard_set_acquisition_seconds(unsigned int seconds)
+ {
+ 	int64_t now;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (state.health_phase != MLINK_HEALTH_DISABLED) return 0;
++#endif
+ 	if (state.acquisition_set || !state.guard_started || state.guard_invalid
+ 	 || state.terminal || seconds == 0U || seconds > 120U
+ 	 || !clock_now(&now) || now < state.guard_start_ms
+@@ -412,17 +624,17 @@
+ 	if (state.attempted) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_ATTEMPT_CONSUMED, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.ops == NULL) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.attempted = 1;
+@@ -431,13 +643,13 @@
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.ops->select_unique == NULL) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_SELECT,
+ 			MLINK_ADMISSION_REASON_CALLBACK_MISSING, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	api_enter();
+@@ -446,11 +658,11 @@
+ 		MLINK_ADMISSION_REASON_HOST_FAILED);
+ 	api_leave();
+ 	if (rc != 0) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (selected_count != 1) {
+@@ -458,17 +670,17 @@
+ 			selected_count > 1 ? MLINK_ADMISSION_REASON_SELECTION_AMBIGUOUS
+ 				: MLINK_ADMISSION_REASON_SELECTION_ZERO,
+ 			MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (state.ops->open_selected == NULL) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_OPEN,
+ 			MLINK_ADMISSION_REASON_CALLBACK_MISSING, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.opening = 1;
+@@ -484,7 +696,7 @@
+ 	api_leave();
+ 	state.opening = 0;
+ 	if (rc != 0) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		if (state.opened) {
+ 			state.close_pending = 1;
+ 			close_if_quiescent();
+@@ -496,7 +708,7 @@
+ 			record_diagnostic(MLINK_ADMISSION_STAGE_OPEN,
+ 				MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		}
+-		state.terminal = 1;
++		mark_terminal();
+ 		if (state.opened) {
+ 			state.close_pending = 1;
+ 			close_if_quiescent();
+@@ -508,12 +720,12 @@
+ 	if (state.ops->read_layout == NULL) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_LAYOUT,
+ 			MLINK_ADMISSION_REASON_CALLBACK_MISSING, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+@@ -523,19 +735,19 @@
+ 		MLINK_ADMISSION_REASON_HOST_FAILED);
+ 	api_leave();
+ 	if (rc != 0) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+ 	if (!usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+ 	if (!state.opened) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_LAYOUT,
+ 			MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+@@ -547,7 +759,7 @@
+ 	 || layout.output_report_length != REPORT_SIZE) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_LAYOUT,
+ 			MLINK_ADMISSION_REASON_LAYOUT_INVALID, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+@@ -557,7 +769,7 @@
+ 			record_diagnostic(MLINK_ADMISSION_STAGE_LAYOUT,
+ 				MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+ 		}
+-		state.terminal = 1;
++		mark_terminal();
+ 		microlink_usb_close();
+ 		return 0;
+ 	}
+@@ -573,7 +785,7 @@
+ 
+ void microlink_usb_close(void)
+ {
+-	state.terminal = 1;
++	mark_terminal();
+ 	if ((!state.opened && !state.opening) || state.close_called) {
+ 		return;
+ 	}
+@@ -590,9 +802,12 @@
+ 	unsigned int budget_ms;
+ 	unsigned int timeout_ms;
+ 	if (!usable() || !clock_now(&now)) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (!health_sample_before_deadline(now)) return -1;
++#endif
+ 	budget_ms = remaining_ms();
+ 	caller_remaining = caller_deadline_ms - now;
+ 	if (caller_remaining <= 0) {
+@@ -604,24 +819,24 @@
+ 		if (timeout_ms > budget_ms) timeout_ms = budget_ms;
+ 	}
+ 	if (!usable() || state.ops == NULL || state.ops->read_report == NULL) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
+ 	api_enter();
+ 	count = state.ops->read_report(state.user, incoming, sizeof(incoming), timeout_ms);
+ 	api_leave();
+ 	if (!usable() || !state.opened) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
+ 	if (count == 0) return 0;
+ 	if (count < 0 || (size_t)count > sizeof(incoming)) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
+ 	if (incoming[0] != state.layout.input_report_id) return 2;
+ 	if (count != REPORT_SIZE) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
+ 	memcpy(state.report, incoming, REPORT_SIZE);
+@@ -637,7 +852,7 @@
+ 		int rc = read_one_report(caller_deadline_ms, foreign == 0);
+ 		if (rc != 2) return rc;
+ 	}
+-	state.terminal = 1;
++	mark_terminal();
+ 	return -1;
+ }
+ 
+@@ -648,6 +863,21 @@
+ 	ssize_t count;
+ 	int64_t now;
+ 	if (cleanup_stop) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (state.health_phase != MLINK_HEALTH_DISABLED) {
++			if (state.health_phase != MLINK_HEALTH_CLEANING
++			 || state.cleanup_stop_attempted || !state.cleanup_deadline_valid
++			 || state.cleanup_failed || !state.opened || !state.admitted
++			 || state.in_api || state.ops == NULL || state.ops->write_report == NULL)
++				return 0;
++			if (!clock_now(&now) || now >= state.cleanup_deadline_ms) {
++				state.cleanup_failed = 1;
++				return 0;
++			}
++			state.cleanup_stop_attempted = 1;
++		} else
++#endif
++		{
+ 		/* This bypasses the acquisition cutoff and cancellation callback only
+ 		 * for the exact cleanup STOP. No data exchange or retry can use it. */
+ 		if (buf == NULL || len != 1U || buf[0] != 0xF7U
+@@ -659,10 +889,11 @@
+ 			return 0;
+ 		}
+ 		state.cleanup_stop_attempted = 1;
++		}
+ 	}
+ 	if (buf == NULL || len == 0 || len > PAYLOAD_SIZE || !state.admitted
+ 	 || (!cleanup_stop && !usable()) || state.ops == NULL || state.ops->write_report == NULL) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	outgoing[0] = (unsigned char)state.layout.output_report_id;
+@@ -672,8 +903,18 @@
+ 	count = state.ops->write_report(state.user, outgoing, sizeof(outgoing));
+ 	api_leave();
+ 	if (count != REPORT_SIZE || (!cleanup_stop && !usable()) || !state.opened
+-	 || (cleanup_stop && (!clock_now(&now) || now >= state.deadline_ms))) {
+-		state.terminal = 1;
++	 || (cleanup_stop && (!clock_now(&now) || now >=
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		(state.health_phase != MLINK_HEALTH_DISABLED ? state.cleanup_deadline_ms : state.deadline_ms)
++#else
++		state.deadline_ms
++#endif
++		))) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (cleanup_stop && state.health_phase != MLINK_HEALTH_DISABLED)
++			state.cleanup_failed = 1;
++#endif
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	return 1;
+@@ -695,7 +936,7 @@
+ 	int rc;
+ 	unsigned int timeout_ms;
+ 	if (ch == NULL || !state.admitted || !usable()) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return -1;
+ 	}
+ 	if (state.report_pos >= state.report_end) {
+@@ -706,8 +947,11 @@
+ 		timeout_ms = d_usec / 1000L > 300000L ? 300000U
+ 			: (unsigned int)(d_usec / 1000L + ((d_usec % 1000L) != 0));
+ 		if (!usable() || !clock_now(&now)) return -1;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (!health_sample_before_deadline(now)) return -1;
++#endif
+ 		guard_remaining = state.deadline_ms - now;
+-		if (guard_remaining <= 0) { state.terminal = 1; return -1; }
++		if (guard_remaining <= 0) { mark_terminal(); return -1; }
+ 		if ((int64_t)timeout_ms > guard_remaining)
+ 			timeout_ms = (unsigned int)guard_remaining;
+ 		call_deadline = now + timeout_ms;
+@@ -742,7 +986,7 @@
+ 	int rc;
+ 	state.report_pos = state.report_end = 0;
+ 	if (!state.admitted) {
+-		state.terminal = 1;
++		mark_terminal();
+ 		return;
+ 	}
+ 	for (i = 0; i < MAX_FLUSH_REPORTS; i++) {
+@@ -754,7 +998,7 @@
+ 			return;
+ 		}
+ 	}
+-	state.terminal = 1;
++	mark_terminal();
+ }
+ 
+ int microlink_usb_get_hid_fallback(int max_age_sec, int *ac_present,
+@@ -785,6 +1029,17 @@
+ }
+ 
+ #ifdef MLINK_HIDAPI_NATIVE_CANDIDATE
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++int mlink_shared_prepare_native_v2(
++	const struct mlink_hidapi_native_config *config)
++{
++	/* Share the original native preparation attempt, not a second admission.
++	 * Native creation does not open HID; preserve its original time anchor. */
++	if (!mlink_shared_prepare_native(config, 35)) return 0;
++	state.health_phase = MLINK_HEALTH_STARTING;
++	return usable();
++}
++#endif
+ int mlink_shared_prepare_native(
+ 	const struct mlink_hidapi_native_config *config, long seconds)
+ {
+@@ -797,7 +1052,7 @@
+ 	if (config == NULL || seconds < 1 || seconds > MAX_GUARD_SECONDS) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_INVALID_CONFIG, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		state.guard_invalid = 1;
+ 		return 0;
+ 	}
+@@ -805,14 +1060,14 @@
+ 	 || state.in_api || state.terminal) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		state.guard_invalid = 1;
+ 		return 0;
+ 	}
+ 	if (mlink_hidapi_native_create(config, &native_binding) != 0) {
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_HOST_FAILED, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		return 0;
+ 	}
+ 	state.ops = native_binding.ops;
+@@ -830,11 +1085,11 @@
+ 		native_prepare_attempted = 1;
+ 		record_diagnostic(MLINK_ADMISSION_STAGE_PREPARE,
+ 			MLINK_ADMISSION_REASON_STATE, MLINK_ADMISSION_PARSER_NOT_RUN);
+-		state.terminal = 1;
++		mark_terminal();
+ 		state.guard_invalid = 1;
+ 		return MLINK_HIDAPI_SESSION_RELEASED;
+ 	}
+-	state.terminal = 1;
++	mark_terminal();
+ 	state.admitted = 0;
+ 	state.report_pos = state.report_end = 0;
+ 	if (state.ops == NULL) {
+--- a/drivers/apcmicrolink-hidapi-session.h
++++ b/drivers/apcmicrolink-hidapi-session.h
+@@ -6,6 +6,45 @@
+ 
+ #include "apcmicrolink-hidapi-shared-host.h"
+ 
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++#define MLINK_OPERATIONAL_MAX_ELAPSED UINT64_C(9007199254740991)
++typedef enum mlink_health_phase {
++	MLINK_HEALTH_DISABLED = 0, MLINK_HEALTH_STARTING, MLINK_HEALTH_ACTIVE,
++	MLINK_HEALTH_CLEANING, MLINK_HEALTH_FINISHED
++} mlink_health_phase_t;
++typedef enum mlink_health_reason {
++	MLINK_HEALTH_NONE = 0, MLINK_HEALTH_STOP, MLINK_HEALTH_STARTUP_DEADLINE,
++	MLINK_HEALTH_PROGRESS_DEADLINE, MLINK_HEALTH_CLOCK,
++	MLINK_HEALTH_OVERFLOW, MLINK_HEALTH_IO, MLINK_HEALTH_REFRESH
++} mlink_health_reason_t;
++typedef struct mlink_health_snapshot {
++	mlink_health_phase_t phase;
++	mlink_health_reason_t reason;
++	int cleanup_failed;
++	int cleanup_stop_attempted;
++	uint64_t publications;
++} mlink_health_snapshot_t;
++/* Local-only opt-in; no HID calls. Begin once, before open; never renews the
++ * original elapsed anchor. Native callers use prepare_native_v2 instead. */
++int mlink_shared_operational_begin(void);
++/* Call ONLY after caller freshness admission and successful full publication.
++ * The minimum observation time uses the original elapsed anchor, must strictly
++ * advance, and must not exceed current elapsed. The caller verifies its fixed
++ * field union, nonshrinking observation set and status freshness. Raw I/O,
++ * cached refresh or failed publication must never call this local API. */
++int mlink_shared_operational_published(uint64_t minimum_observed_elapsed_ms);
++int mlink_shared_operational_elapsed(uint64_t *elapsed_ms);
++/* Stop/failure freezes ordinary I/O irreversibly. At most one cleanup STOP
++ * followed by close/release is allowed, within two seconds. */
++void mlink_shared_operational_stop(void);
++/* Driver/parser/publication failure; first reason survives subsequent Stop. */
++void mlink_shared_operational_fail(void);
++/* Reports cleanup completion only. A non-STOP terminal reason still means
++ * session failure even when resource cleanup succeeded. */
++int mlink_shared_operational_cleanup_complete(void);
++mlink_health_snapshot_t mlink_shared_operational_snapshot(void);
++#endif
++
+ #if defined(MLINK_HIDAPI_NATIVE_CANDIDATE) && defined(MLINK_HIDAPI_SHARED_TEST)
+ #error "MLINK_HIDAPI_NATIVE_CANDIDATE and MLINK_HIDAPI_SHARED_TEST are mutually exclusive"
+ #endif
+@@ -22,6 +61,10 @@
+  * local binding, and starts a nonrenewable guard. It performs no HID calls. */
+ int mlink_shared_prepare_native(
+ 	const struct mlink_hidapi_native_config *config, long seconds);
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++int mlink_shared_prepare_native_v2(
++	const struct mlink_hidapi_native_config *config);
++#endif
+ 
+ /* Marks terminal and releases only after close and callbacks are quiescent.
+  * May be requested reentrantly; no subsequent I/O is admitted. RETAINED means

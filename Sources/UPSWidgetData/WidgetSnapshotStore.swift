@@ -25,6 +25,27 @@ public actor WidgetSnapshotStore {
     private let decoder: JSONDecoder
 
     public init(directoryURL: URL, mode: WidgetStoreMode) throws {
+        guard let descriptor = try Self.openDirectory(directoryURL, mode: mode) else {
+            // Preserve the original initializer contract: a missing read-only
+            // store is unsafe for callers that explicitly construct a store.
+            throw WidgetStoreError.unsafeLocation
+        }
+        directoryDescriptor = descriptor
+        self.mode = mode
+        encoder = Self.makeEncoder()
+        decoder = Self.makeDecoder()
+    }
+
+    /// Reads a widget snapshot if its leaf store exists. Only an absent leaf
+    /// directory is treated as an empty first-use state; unsafe paths still fail.
+    public static func readIfPresent(directoryURL: URL, now: Date) throws -> WidgetSnapshot? {
+        guard isFinite(now) else { throw WidgetStoreError.invalidRequest }
+        guard let descriptor = try openDirectory(directoryURL, mode: .readOnly) else { return nil }
+        defer { _ = Darwin.close(descriptor) }
+        return try read(from: descriptor, decoder: makeDecoder(), now: now)
+    }
+
+    private static func openDirectory(_ directoryURL: URL, mode: WidgetStoreMode) throws -> Int32? {
         guard directoryURL.isFileURL else { throw WidgetStoreError.unsafeLocation }
         let directory = directoryURL.standardizedFileURL
         let name = directory.lastPathComponent
@@ -52,7 +73,17 @@ public actor WidgetSnapshotStore {
         let descriptor = name.withCString {
             openat(parentDescriptor, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         }
-        guard descriptor >= 0 else { throw WidgetStoreError.unsafeLocation }
+        guard descriptor >= 0 else {
+            guard mode == .readOnly, errno == ENOENT else { throw WidgetStoreError.unsafeLocation }
+            var leafInfo = stat()
+            let leafExists = name.withCString {
+                fstatat(parentDescriptor, $0, &leafInfo, AT_SYMLINK_NOFOLLOW)
+            }
+            // A dangling symlink (or any other entry that failed open) is not
+            // an absent directory. Return nil only when the leaf itself is gone.
+            guard leafExists != 0, errno == ENOENT else { throw WidgetStoreError.unsafeLocation }
+            return nil
+        }
         if created, fchmod(descriptor, mode_t(0o700)) != 0 {
             _ = Darwin.close(descriptor)
             throw WidgetStoreError.unsafeLocation
@@ -62,10 +93,7 @@ public actor WidgetSnapshotStore {
             throw WidgetStoreError.unsafeLocation
         }
 
-        directoryDescriptor = descriptor
-        self.mode = mode
-        encoder = Self.makeEncoder()
-        decoder = Self.makeDecoder()
+        return descriptor
     }
 
     deinit {
@@ -73,7 +101,12 @@ public actor WidgetSnapshotStore {
     }
 
     public func read(now: Date) throws -> WidgetSnapshot? {
-        guard Self.isFinite(now) else { throw WidgetStoreError.invalidRequest }
+        try Self.read(from: directoryDescriptor, decoder: decoder, now: now)
+    }
+
+    private static func read(from directoryDescriptor: Int32, decoder: JSONDecoder,
+                             now: Date) throws -> WidgetSnapshot? {
+        guard isFinite(now) else { throw WidgetStoreError.invalidRequest }
         guard Self.isPrivateDirectory(directoryDescriptor) else { throw WidgetStoreError.unsafeLocation }
         let descriptor = Self.openExistingTarget(directoryDescriptor)
         guard descriptor >= 0 else {

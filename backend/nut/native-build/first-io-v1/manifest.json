@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "name": "Optional first-IO source profile",
+  "status": "SOURCE_ONLY_PROFILE",
+  "source_only": true,
+  "qualification": {
+    "base_profile": "../hidapi-0.16/manifest.json",
+    "base_manifest_sha256": "ac1e333cf6974791772a1272d648a2f599cbbcf368876a2b861af24f94de8411",
+    "native_project_file_count": 190,
+    "native_base_map_sha256": "7627e721e4487c6a1bfb839deb7d11cb90b5fa964bf11eeafca764f4e23ddb94",
+    "native_postimage_map_sha256": "1cd2f2888d56fbf8cfa00f685aa3cfd0674e2a8e80877254ce8502057a602f02",
+    "native_unchanged_project_files": 187,
+    "vendor_file_count": 8,
+    "vendor_map_unchanged": true,
+    "runtime_base_manifest": "../../qualification/module-sha256.json",
+    "runtime_base_manifest_sha256": "191253602725c1e71a527821d518d70ee567cd25336867aec91c7cf73c467dcd",
+    "runtime_qualification_patch": "../../qualification/smc1500i-90s.patch",
+    "runtime_qualification_patch_sha256": "75e7a32a7032f07af8f97c78520389fa011320e26780da9066c237662892b1a9",
+    "runtime_qualified_base_file_count": 9,
+    "runtime_qualified_base_map_sha256": "d47f81a8fd28d6fbabe811364d1332a6c5f0aea4a81607f9660f0a0601de30e6",
+    "runtime_postimage_map_sha256": "909313f6be3d67da67c25b890dd0029997161837f8ffa049f394a2e43196a784",
+    "runtime_unchanged_files": 7,
+    "native_changed_files": 3,
+    "runtime_changed_files": 2,
+    "postimage_map_encoding": "compact ASCII sorted-key JSON with trailing LF",
+    "qualified_runtime_entrypoint_window_seconds": 90
+  },
+  "payloads": {
+    "native-first-io-v1.patch": "00c9dcec36e715ded5105d855cdbc5a954f8d5df39acd692ec2fbf4ef17fec5b",
+    "cleanup-diagnostics-first-io-v1.patch": "6a45a55a619e3d2290cdd11e2bd4fd3da92720d86e9dbccba6d592915b3b6124",
+    "process-deadline-first-io-v1.patch": "cb17c1587a156b316badf0e1d2d253250d6a33e754df88a9d3ac23d4fa22fcc7"
+  },
+  "native_delta": {
+    "drivers/apcmicrolink-hidapi-session.h": {
+      "before": "44791f7e9b826c00b29316cfd068cb090fa62b7560aa5fb16565b69166940177",
+      "after": "66f1eebeb0c1cccb03b0e04051da9407356821f1ab8c3d7cbc936061ae023a21"
+    },
+    "drivers/apcmicrolink-hidapi-shared.c": {
+      "before": "2c15cd848a1018267239e89e91c1900593b74be95feb18ea33e6cae20b9e7149",
+      "after": "c5ef2f252c4c96c49ed7b31c79320d206bd9074a743e359db5a366fcd88901ee"
+    },
+    "drivers/apcmicrolink.c": {
+      "before": "765ebae36f5add76c8d8aca2ba29bc0a66694fac3af6a114bf9667b8c51f2739",
+      "after": "cd574087b2bf42ac93871f709246f607eb97e90c2fa0f3453d29d0f94fc496a6"
+    }
+  },
+  "runtime_delta": {
+    "cleanup_diagnostics.py": {
+      "before": "0ab73e7398f114fa01245f0aeee32e2cdb2092342de892521148ea00545fc752",
+      "after": "d1832bd7b03fdf4ad14239a5f0c3e0f7a96382c5900376b399b90ad705920ed7"
+    },
+    "process_deadline.py": {
+      "before": "81cf0d70708042810f7f26f42e2306cb89e83d4e306063dc1a5648b2eb883d4e",
+      "after": "209d862bf4ec25aa501c04099b9dc9c3924d43bd41cafb54406c08510b064a6a"
+    }
+  },
+  "vendor": {
+    "profile": "../hidapi-0.16/manifest.json",
+    "file_count": 8,
+    "changed": false
+  },
+  "execution": {
+    "build": "NOT_RUN",
+    "signing": "NOT_RUN",
+    "payload_execution": "NOT_RUN"
+  }
+}

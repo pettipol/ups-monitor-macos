@@ -1,9 +1,91 @@
 # Experimental NUT Upstream Status
 
-Refreshed on 2026-10-11. This is a source-research snapshot, not hardware
-qualification. The app does not bundle or launch a UPS driver, run `upsmon`,
-or implement automatic shutdown. The experimental guarded source patch is an
-offline qualification artifact, not a production backend.
+Full source-research snapshot: 2026-10-11. The targeted discussion refresh
+below is dated separately. This is source research, not hardware
+qualification. The default app does not run `upsmon` or implement automatic
+shutdown. Separately opted-in developer bundles can package and launch a
+hash-pinned, bounded experimental driver. This developer path is not a
+qualified continuous production backend.
+
+## Targeted lifecycle recheck, 2026-10-27
+
+The official GitHub connector still reports [issue #3751](https://github.com/networkupstools/nut/issues/3751)
+closed with one contributor reply and [PR #3778](https://github.com/networkupstools/nut/pull/3778)
+merged as `59c77828298b4ff4e1a5c752123227647a8e906e`. The PR explicitly reports
+no hardware testing. Its bounded abandoned-transfer reap follows a USB reset
+in the upstream libusb path; the local shared-HIDAPI candidate does not adopt
+that reset/recovery path. This recheck does not change dependency pins or
+establish continuous-session compatibility. Release versions were not
+refreshed in this check; the dated stable-version observations below retain
+their original scope.
+
+## Targeted metadata refresh, 2026-10-26
+
+The official GitHub API still identifies [NUT v2.8.5](https://github.com/networkupstools/nut/releases/tag/v2.8.5)
+and [libusb v1.0.30](https://github.com/libusb/libusb/releases/tag/v1.0.30)
+as the latest stable releases. Issue #3751 remains closed, with one contributor
+reply; PR #3778 remains merged. Its description still explicitly excludes
+hardware testing. The discussion and PR describe the upstream libusb transport,
+not the separately guarded HIDAPI path used by the local candidate. This check
+read release, issue, comment and PR metadata only. It did not audit current master,
+change dependency pins or qualify any hardware behavior.
+
+## Targeted Lifecycle Discussion Refresh, 2026-10-24
+
+[Issue #3751](https://github.com/networkupstools/nut/issues/3751) received a
+contributor response on October 18 and was closed on October 21 by merged
+[PR #3778](https://github.com/networkupstools/nut/pull/3778). The earlier
+"no replies" observation below is historical. The PR describes two changes
+to the upstream asynchronous libusb transport:
+
+- Start the event-pump thread before submitting the first transfer, so thread
+  creation failure leaves no submitted transfer outstanding.
+- After reset and before closing the handle, allow a bounded event-loop reap
+  of abandoned transfers; report those still pending as leaked.
+
+The PR explicitly reports no hardware test. Its reset/reopen path is not our
+guarded HIDAPI transport, and the merge is not an endorsement of SMC1500I
+firmware 10 on macOS. This source refresh does not adopt the PR, change any
+dependency pin, authorize reset/reopen, or qualify the local candidate. It
+also does not explain a local HIDAPI admission failure.
+
+The remaining sections preserve their dated research snapshots; unqualified
+"remains open" and version statements there refer to those earlier checks.
+
+## Historical Targeted Discussion Refresh, 2026-10-12
+
+The three official discussions and official NUT/libusb release pages were
+read in BrowserOS neo without posting or changing anything. This check did
+not fetch or audit current master or change dependency pins. The release
+pages still label NUT v2.8.5 and libusb v1.0.30 as latest stable; this is a
+release-page observation, not adoption or qualification of a new build.
+
+- [Issue #3751](https://github.com/networkupstools/nut/issues/3751), the
+  source-only lifecycle question, remained open with no replies visible. It
+  does not report a reproduced hardware failure or an executed driver test.
+- [Issue #3587](https://github.com/networkupstools/nut/issues/3587) remained
+  open. A visible October 10 user report describes a run as apparently working;
+  it is an attributed report, not independently verified compatibility. Later
+  timeline references include serial and control-command changes, not a
+  demonstrated asynchronous USB ownership/stop/reopen/exit solution.
+- [PR #3719](https://github.com/networkupstools/nut/pull/3719) remained open
+  with serial and control-command scope, observed head `c36aa01`. The listed
+  seven changed files do not include `apcmicrolink-usb.c` or `libusb1.c`.
+  No bounded USB cancellation or reopen
+  solution was established from its discussion and listed scope. This is not
+  a source-diff or commit-ancestry audit, and the PR is not adopted here.
+
+The official [NUT releases](https://github.com/networkupstools/nut/releases)
+and [libusb releases](https://github.com/libusb/libusb/releases) pages show
+no newer stable release than those already recorded. None of the discussion
+activity establishes SMC1500I firmware 10 on macOS compatibility. Transient PR
+CI counts are not treated as USB lifecycle or hardware evidence.
+
+No upstream resolution of the local probe-policy gap was established by this
+limited check. This does not imply absence of other upstream work. A count of
+session attempts and a no-reopen policy still require local source review;
+neither property proves data completeness, electrical safety or real firmware
+compatibility. Any future device session still requires separate consent.
 
 ## Merged Upstream, Not Hardware Qualified
 

@@ -10,13 +10,10 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    name: Source, tests and ad-hoc build
-    # The hosted image is preview; the selected Xcode is the stable release.
-    runs-on: xcode-27
+  reader-contracts:
+    name: Offline reader contracts (Python 3.15.2)
+    runs-on: macos-26
     timeout-minutes: 30
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     defaults:
       run:
         shell: bash
@@ -27,9 +24,54 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Select Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.14.8'
+          python-version: '3.15.2'
+          allow-prereleases: false
+      - name: Verify Python runtime and runner architecture
+        run: |
+          python3 -I -S -B - <<'PYTHON'
+          import platform
+          import sys
+
+          host = (sys.version_info[:3], sys.platform, platform.machine())
+          if host != ((3, 15, 2), "darwin", "arm64"):
+              raise SystemExit(f"Expected Python 3.15.2 on macOS arm64, got {host}")
+          print("Python 3.15.2 on macOS arm64")
+          PYTHON
+      - name: Validate offline reader contracts
+        run: python3 -I -S -B scripts/check_reader_contracts.py
+
+  macos:
+    name: Source, tests and ad-hoc build
+    needs: reader-contracts
+    if: ${{ !cancelled() }}
+    # The image inventory checked on 2026-11-19 lists stable Xcode 27.2 build 27B52.
+    # The image is mutable: exact preflight still rejects an incompatible toolchain.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require successful reader contracts
+        if: ${{ needs.reader-contracts.result != 'success' }}
+        env:
+          READER_RESULT: ${{ needs.reader-contracts.result }}
+        run: |
+          printf 'Offline reader contracts did not pass (%s).\n' "$READER_RESULT" >&2
+          exit 1
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Select Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.15.2'
           allow-prereleases: false
       - name: Validate preflight guards with synthetic commands
         run: bash scripts/test_check_preflight.sh

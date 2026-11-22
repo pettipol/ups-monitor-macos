@@ -1,0 +1,899 @@
+--- a/drivers/apcmicrolink.c
++++ b/drivers/apcmicrolink.c
+@@ -33,6 +33,16 @@
+ #include <xlocale.h>
+ #endif
+ #include "apcmicrolink-continuous.h"
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++#include "apcmicrolink-operational-freshness.h"
++#endif
++#endif
++
++#if defined(MLINK_HIDAPI_OPERATIONAL_V2) \
++	&& (!defined(MLINK_HIDAPI_CONTINUOUS_CANDIDATE) \
++	 || !defined(MLINK_HIDAPI_NATIVE_CANDIDATE) || defined(WIN32) \
++	 || defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1))
++#error "Operational v2 requires native continuous macOS; v1 diagnostics are unsupported"
+ #endif
+ 
+ #include "serial.h"
+@@ -283,6 +293,17 @@
+ static speed_t microlink_baudrate = MLINK_DEFAULT_BAUDRATE;
+ static int session_ready = 0;
+ static int guarded_monitor = 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++static int operational_mode = 0;
++static int operational_startup_failed = 0;
++/* Becomes true only when shared open, including layout admission, succeeds.
++ * Never cleared by Stop/close: an admitted session must attempt cleanup STOP. */
++static int operational_session_admitted = 0;
++static int operational_cleanup_done = 0;
++static int operational_cleanup_ok = 0;
++static void microlink_operational_cleanup(void);
++static void microlink_operational_updateinfo(void);
++#endif
+ #ifdef WITH_USB
+ static unsigned int guard_probe_attempt_limit = 0;
+ static unsigned int guard_probe_attempts_used = 0;
+@@ -308,6 +329,14 @@
+ 		upslogx(LOG_ERR, "apcmicrolink HIDAPI: terminal cleanup retained ownership; no retry");
+ 	}
+ }
++
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++static void microlink_hidapi_early_cleanup(void)
++{
++	if (operational_mode) microlink_operational_cleanup();
++	else microlink_hidapi_finish();
++}
++#endif
+ 
+ static int microlink_hidapi_stop(void *user)
+ {
+@@ -366,6 +395,9 @@
+ #ifndef MLINK_CONTINUOUS_PACING_V2
+ #define MLINK_CONTINUOUS_PACING_V2 0
+ #endif
++#if defined(MLINK_HIDAPI_OPERATIONAL_V2) && !MLINK_CONTINUOUS_PACING_V2
++#error "Operational v2 requires the existing H07 continuous NEXT pacing"
++#endif
+ #if MLINK_CONTINUOUS_PACING_V2 && !defined(MLINK_HIDAPI_NATIVE_CANDIDATE)
+ #error "continuous pacing v2 requires the native continuous candidate"
+ #endif
+@@ -389,6 +421,53 @@
+ 	MLINK_CONT_FIELD_POWER
+ };
+ static int continuous_mode = 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++typedef mlink_operational_field_t mlink_collected_field_t;
++#define mlink_collected_fields_clear mlink_operational_fields_clear
++#define mlink_collected_field_observed mlink_operational_field_observed
++#define mlink_collected_field_unavailable mlink_operational_field_unavailable
++#define mlink_collected_field_invalid mlink_operational_field_invalid
++#define mlink_collected_field_mirror mlink_operational_field_mirror
++static uint64_t operational_sequence = 0;
++static uint64_t operational_last_slot = 0;
++static int operational_have_slot = 0;
++static mlink_operational_end_reason_t operational_end_reason = MLINK_OPERATIONAL_END_GUARD_ERROR;
++static mlink_operational_freshness_t operational_freshness;
++#else
++typedef mlink_continuous_field_t mlink_collected_field_t;
++#define mlink_collected_fields_clear mlink_continuous_fields_clear
++#define mlink_collected_field_observed mlink_continuous_field_observed
++#define mlink_collected_field_unavailable mlink_continuous_field_unavailable
++#define mlink_collected_field_invalid mlink_continuous_field_invalid
++#define mlink_collected_field_mirror mlink_continuous_field_mirror
++#endif
++
++static uint64_t microlink_collection_limit(void)
++{
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode) return MLINK_OPERATIONAL_MAX_SAFE_INTEGER;
++#endif
++	return UINT64_C(119999);
++}
++
++static int microlink_collection_elapsed(uint64_t *elapsed_ms)
++{
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode) return mlink_shared_operational_elapsed(elapsed_ms);
++#endif
++	return microlink_usb_guard_elapsed_ms(elapsed_ms);
++}
++
++static int microlink_collection_observed(mlink_collected_field_t *field,
++	mlink_continuous_kind_t kind, const char *value, uint64_t observed_ms)
++{
++	if (observed_ms > microlink_collection_limit()) return 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	return mlink_collected_field_observed(field, kind, value, observed_ms);
++#else
++	return mlink_collected_field_observed(field, kind, value, (uint32_t)observed_ms);
++#endif
++}
+ static int continuous_guard_error = 0;
+ static int continuous_terminal_latched = 0;
+ static int continuous_geometry_admitted = 0;
+@@ -397,7 +476,7 @@
+ static uint32_t continuous_last_slot = 0;
+ static int continuous_have_slot = 0;
+ static mlink_continuous_end_reason_t continuous_end_reason = MLINK_CONTINUOUS_END_DURATION_COMPLETE;
+-static mlink_continuous_field_t continuous_fields[MLINK_CONTINUOUS_FIELD_COUNT];
++static mlink_collected_field_t continuous_fields[MLINK_CONTINUOUS_FIELD_COUNT];
+ static mlink_continuous_page_t continuous_object_pages[256];
+ static mlink_continuous_page_t continuous_blob_pages[256];
+ static unsigned char continuous_definition[MLINK_DESCRIPTOR_MAX_BLOB];
+@@ -1106,6 +1185,12 @@
+ {
+ #ifdef WITH_USB
+ 	if (guard_probe_attempt_limit > 0 && is_usb && microlink_usb_device_gone()) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (operational_mode) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
++			return;
++		}
++#endif
+ 		fatalx(EXIT_FAILURE,
+ 			"apcmicrolink: guarded probe USB device gone; reopen is disabled");
+ 	}
+@@ -2340,16 +2425,16 @@
+ 
+ static void microlink_continuous_clear_dynamic_fields(void)
+ {
+-	mlink_continuous_field_t real_nominal = continuous_fields[MLINK_CONT_FIELD_REALPOWER_NOMINAL];
+-	mlink_continuous_field_t va_nominal = continuous_fields[MLINK_CONT_FIELD_POWER_NOMINAL];
+-	mlink_continuous_fields_clear(continuous_fields);
++	mlink_collected_field_t real_nominal = continuous_fields[MLINK_CONT_FIELD_REALPOWER_NOMINAL];
++	mlink_collected_field_t va_nominal = continuous_fields[MLINK_CONT_FIELD_POWER_NOMINAL];
++	mlink_collected_fields_clear(continuous_fields);
+ 	continuous_fields[MLINK_CONT_FIELD_REALPOWER_NOMINAL] = real_nominal;
+ 	continuous_fields[MLINK_CONT_FIELD_POWER_NOMINAL] = va_nominal;
+ }
+ 
+ static void microlink_continuous_mirror_temperature(void)
+ {
+-	mlink_continuous_field_mirror(
++	mlink_collected_field_mirror(
+ 		&continuous_fields[MLINK_CONT_FIELD_UPS_TEMPERATURE],
+ 		&continuous_fields[MLINK_CONT_FIELD_BATTERY_TEMPERATURE]);
+ }
+@@ -2358,7 +2443,7 @@
+ 	const char *path, const microlink_descriptor_usage_t *usage, int decoded)
+ {
+ 	mlink_continuous_kind_t kind = MLINK_CONTINUOUS_REPORTED;
+-	mlink_continuous_field_t *field;
++	mlink_collected_field_t *field;
+ 	uint64_t observed_ms;
+ 	char wire_value[MLINK_CONTINUOUS_MAX_VALUE + 1U];
+ 	const char *value;
+@@ -2371,8 +2456,8 @@
+ 	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
+ 		page0.width, descriptor_blob_len, usage->data_offset, usage->size,
+ 		&observed_ms)
+-	 || observed_ms > 119999U) {
+-		mlink_continuous_field_unavailable(field, kind);
++	 || observed_ms > microlink_collection_limit()) {
++		mlink_collected_field_unavailable(field, kind);
+ 		MLINK_DIAG_INC(DIAG_CAPTURE_UNAVAILABLE);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+@@ -2380,22 +2465,22 @@
+ 	}
+ 	value = dstate_getinfo(name);
+ 	if (value == NULL) {
+-		mlink_continuous_field_unavailable(field, kind);
++		mlink_collected_field_unavailable(field, kind);
+ 		MLINK_DIAG_INC(DIAG_CAPTURE_UNAVAILABLE);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+ 		return;
+ 	}
+ 	if (!microlink_continuous_normalize_number(value, wire_value)) {
+-		mlink_continuous_field_invalid(field, kind);
++		mlink_collected_field_invalid(field, kind);
+ 		MLINK_DIAG_INC(DIAG_CAPTURE_INVALID);
+ 		if (index == MLINK_CONT_FIELD_BATTERY_TEMPERATURE)
+ 			microlink_continuous_mirror_temperature();
+ 		return;
+ 	}
+-	if (!mlink_continuous_field_observed(field, kind, wire_value,
+-		(uint32_t)observed_ms)) {
+-		mlink_continuous_field_invalid(field, kind);
++	if (!microlink_collection_observed(field, kind, wire_value,
++		observed_ms)) {
++		mlink_collected_field_invalid(field, kind);
+ 		MLINK_DIAG_INC(DIAG_CAPTURE_INVALID);
+ 	} else {
+ 		MLINK_DIAG_INC(DIAG_CAPTURE_OBSERVED);
+@@ -3099,6 +3184,25 @@
+ static void microlink_continuous_latch_end(mlink_continuous_end_reason_t reason)
+ {
+ 	if (!continuous_terminal_latched) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (operational_mode) {
++			switch (reason) {
++			case MLINK_CONTINUOUS_END_CANCELLED:
++				operational_end_reason = MLINK_OPERATIONAL_END_CANCELLED; break;
++			case MLINK_CONTINUOUS_END_DEVICE_LOST:
++				operational_end_reason = MLINK_OPERATIONAL_END_DEVICE_LOST; break;
++			case MLINK_CONTINUOUS_END_SESSION_LOST:
++				operational_end_reason = MLINK_OPERATIONAL_END_SESSION_LOST; break;
++			case MLINK_CONTINUOUS_END_OUTPUT_ERROR:
++				operational_end_reason = MLINK_OPERATIONAL_END_OUTPUT_ERROR; break;
++			default:
++				operational_end_reason = MLINK_OPERATIONAL_END_GUARD_ERROR; break;
++			}
++			if (reason == MLINK_CONTINUOUS_END_CANCELLED)
++				mlink_shared_operational_stop();
++			else mlink_shared_operational_fail();
++		}
++#endif
+ 		continuous_end_reason = reason;
+ 		continuous_terminal_latched = 1;
+ 	}
+@@ -3360,8 +3464,8 @@
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	if (continuous_mode) {
+ 		uint64_t received_ms;
+-		if (!microlink_usb_guard_elapsed_ms(&received_ms)
+-		 || received_ms > 119999U) {
++		if (!microlink_collection_elapsed(&received_ms)
++		 || received_ms > microlink_collection_limit()) {
+ 			MLINK_DIAG_INC(DIAG_CACHE_TIME_INVALID);
+ 			continuous_guard_error = 1;
+ 			MLINK_DIAG_SITE("apc_3090");
+@@ -3772,7 +3876,11 @@
+ 		return 0;
+ 	}
+ 
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (!operational_mode || parsed_frames < UINT_MAX) parsed_frames++;
++#else
+ 	parsed_frames++;
++#endif
+ 	microlink_cache_object(frame, framelen);
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	if (continuous_mode && continuous_guard_error) return 0;
+@@ -3911,7 +4019,11 @@
+ 	}
+ 
+ 	poll_primed = 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (!operational_mode || consecutive_timeouts < UINT_MAX) consecutive_timeouts++;
++#else
+ 	consecutive_timeouts++;
++#endif
+ 	MLINK_DIAG_INC(DIAG_POLL_FAILED);
+ 	return 0;
+ }
+@@ -4224,9 +4336,9 @@
+ static void microlink_continuous_capture_derived_one(int percent_index,
+ 	int nominal_index, int target_index)
+ {
+-	mlink_continuous_field_t *percent = &continuous_fields[percent_index];
+-	mlink_continuous_field_t *nominal = &continuous_fields[nominal_index];
+-	mlink_continuous_field_t *target = &continuous_fields[target_index];
++	mlink_collected_field_t *percent = &continuous_fields[percent_index];
++	mlink_collected_field_t *nominal = &continuous_fields[nominal_index];
++	mlink_collected_field_t *target = &continuous_fields[target_index];
+ 	locale_t c_locale;
+ 	char *end;
+ 	double percent_value, nominal_value, derived_value;
+@@ -4236,40 +4348,40 @@
+ 	 || nominal->kind != MLINK_CONTINUOUS_STATIC
+ 	 || !mlink_continuous_number_valid(percent->value)
+ 	 || !mlink_continuous_number_valid(nominal->value)) {
+-		mlink_continuous_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+ 	c_locale = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+ 	if (c_locale == (locale_t)0) {
+-		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+ 	percent_value = strtod_l(percent->value, &end, c_locale);
+ 	if (end == percent->value || *end != '\0') {
+ 		freelocale(c_locale);
+-		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+ 	nominal_value = strtod_l(nominal->value, &end, c_locale);
+ 	if (end == nominal->value || *end != '\0') {
+ 		freelocale(c_locale);
+-		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+ 	freelocale(c_locale);
+ 	if (!isfinite(percent_value) || percent_value < 0.0 || percent_value > 100.0
+ 	 || !isfinite(nominal_value) || nominal_value <= 0.0) {
+-		mlink_continuous_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_unavailable(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+ 	derived_value = percent_value * nominal_value / 100.0;
+ 	if (!isfinite(derived_value)
+ 	 || snprintf(wire_value, sizeof(wire_value), "%.17g", derived_value) < 0
+ 	 || !mlink_continuous_number_valid(wire_value)) {
+-		mlink_continuous_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
++		mlink_collected_field_invalid(target, MLINK_CONTINUOUS_DRIVER_DERIVED);
+ 		return;
+ 	}
+-	(void)mlink_continuous_field_observed(target, MLINK_CONTINUOUS_DRIVER_DERIVED,
++	(void)microlink_collection_observed(target, MLINK_CONTINUOUS_DRIVER_DERIVED,
+ 		wire_value, percent->observed_ms);
+ }
+ 
+@@ -4590,14 +4702,14 @@
+ 	size_t count = 0, used = 0, i;
+ 	uint64_t oldest = UINT64_MAX, observed_ms;
+ 	uint32_t raw;
+-	mlink_continuous_field_t *field = &continuous_fields[MLINK_CONT_FIELD_STATUS];
++	mlink_collected_field_t *field = &continuous_fields[MLINK_CONT_FIELD_STATUS];
+ 
+ 	primary = microlink_find_descriptor_usage_validated("2:4.A");
+ 	if (primary == NULL || !microlink_get_descriptor_map_bits("2:4.A", &raw)
+ 	 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
+ 		page0.width, descriptor_blob_len, primary->data_offset, primary->size,
+ 		&oldest)) {
+-		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++		mlink_collected_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
+ 		return;
+ 	}
+ 	calibration = microlink_find_descriptor_usage("2:13");
+@@ -4606,13 +4718,13 @@
+ 		 || !mlink_continuous_page_dependency(continuous_blob_pages, page0.count,
+ 			page0.width, descriptor_blob_len, calibration->data_offset,
+ 			calibration->size, &observed_ms)) {
+-			mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++			mlink_collected_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
+ 			return;
+ 		}
+ 		if (observed_ms < oldest) oldest = observed_ms;
+ 	}
+-	if (oldest > 119999U || status == NULL) {
+-		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++	if (oldest > microlink_collection_limit() || status == NULL) {
++		mlink_collected_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
+ 		return;
+ 	}
+ 	while (*status != '\0') {
+@@ -4634,22 +4746,22 @@
+ 		int n = snprintf(value + used, sizeof(value) - used, "%s%s",
+ 			i == 0U ? "" : " ", tokens[i]);
+ 		if (n < 0 || (size_t)n >= sizeof(value) - used) {
+-			mlink_continuous_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
++			mlink_collected_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
+ 			return;
+ 		}
+ 		used += (size_t)n;
+ 	}
+ 	if (count == 0U) {
+-		mlink_continuous_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
++		mlink_collected_field_unavailable(field, MLINK_CONTINUOUS_REPORTED);
+ 		return;
+ 	}
+ 	if (!mlink_continuous_status_valid(value)) {
+-		mlink_continuous_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
++		mlink_collected_field_invalid(field, MLINK_CONTINUOUS_REPORTED);
+ 		return;
+ 	}
+ 	(void)raw;
+-	(void)mlink_continuous_field_observed(field, MLINK_CONTINUOUS_REPORTED,
+-		value, (uint32_t)oldest);
++	(void)microlink_collection_observed(field, MLINK_CONTINUOUS_REPORTED,
++		value, oldest);
+ }
+ #endif /* MLINK_HIDAPI_CONTINUOUS_CANDIDATE */
+ 
+@@ -4772,6 +4884,10 @@
+ 	uint16_t vid = 0, pid = 0;
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	continuous_mode = testvar("monitor_stream_v1");
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	operational_mode = testvar("monitor_stream_v2");
++	if (operational_mode) continuous_mode = 1;
++#endif
+ #endif
+ 
+ 	/* All option admission precedes factory allocation and any HIDAPI call. */
+@@ -4799,9 +4915,17 @@
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI guard_deadline must be decimal 1..300");
+ 	}
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+-	if (continuous_mode && deadline != 130) {
++	if (continuous_mode
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	 && !operational_mode
++#endif
++	 && deadline != 130) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink monitor_stream_v1 requires guard_deadline=130");
+ 	}
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode && deadline != 35)
++		fatalx(EXIT_FAILURE, "monitor_stream_v2 requires guard_deadline=35 for startup only");
++#endif
+ #endif
+ 	microlink_read_config();
+ 	srand((unsigned int)microlink_now());
+@@ -4814,10 +4938,27 @@
+ 	config.product_id = pid;
+ 	config.stop_requested = microlink_hidapi_stop;
+ 	/* main registers its normal cleanup only AFTER initups returns. */
+-	if (atexit(microlink_hidapi_finish) != 0) {
++	if (atexit(
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		microlink_hidapi_early_cleanup
++#else
++		microlink_hidapi_finish
++#endif
++		) != 0) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI could not register early cleanup");
+ 	}
+-	if (!mlink_shared_prepare_native(&config, deadline)) {
++	if (!(
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		operational_mode ? mlink_shared_prepare_native_v2(&config) :
++#endif
++		mlink_shared_prepare_native(&config, deadline))) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (operational_mode) {
++			operational_startup_failed = 1;
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++#endif
+ 		diagnostic = mlink_shared_admission_diagnostic();
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI one-shot preparation refused stage=%s reason=%s parser=%s",
+ 			mlink_admission_stage_token(diagnostic.stage),
+@@ -4825,17 +4966,32 @@
+ 			mlink_admission_parser_token(diagnostic.parser_status));
+ 	}
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+-	if (continuous_mode && !microlink_usb_guard_set_acquisition_seconds(120U)) {
++	if (continuous_mode
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	 && !operational_mode
++#endif
++	 && !microlink_usb_guard_set_acquisition_seconds(120U)) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink monitor_stream_v1 could not set its 120-second acquisition cutoff");
+ 	}
+ #endif
+ 	if (microlink_usb_open() != 1) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (operational_mode) {
++			operational_startup_failed = 1;
++			microlink_continuous_latch_end(microlink_guarded_stop_requested()
++				? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++#endif
+ 		diagnostic = mlink_shared_admission_diagnostic();
+ 		fatalx(EXIT_FAILURE, "apcmicrolink HIDAPI one-shot admission failed stage=%s reason=%s parser=%s",
+ 			mlink_admission_stage_token(diagnostic.stage),
+ 			mlink_admission_reason_token(diagnostic.reason),
+ 			mlink_admission_parser_token(diagnostic.parser_status));
+ 	}
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode) operational_session_admitted = 1;
++#endif
+ }
+ #endif
+ 
+@@ -4996,9 +5152,19 @@
+ void upsdrv_initinfo(void)
+ {
+ 	int microlink_ready = 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode && operational_startup_failed) return;
++#endif
+ 
+ #ifdef WITH_USB
+ 	if (guarded_monitor && is_usb && microlink_guard_deadline_expired()) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		if (operational_mode) {
++			microlink_continuous_latch_end(microlink_guarded_stop_requested()
++				? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++			return;
++		}
++#endif
+ 		fatalx(EXIT_FAILURE, "apcmicrolink: guarded USB listener could not be started");
+ 	}
+ #endif /* WITH_USB */
+@@ -5022,6 +5188,13 @@
+ 	continuous_cleanup_done = 0;
+ 	continuous_cleanup_ok = 0;
+ 	continuous_cleanup_clock_ok = 0;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	operational_sequence = 0;
++	operational_last_slot = 0;
++	operational_have_slot = 0;
++	operational_end_reason = MLINK_OPERATIONAL_END_GUARD_ERROR;
++	if (operational_mode) mlink_operational_freshness_init(&operational_freshness);
++#endif
+ #if defined(MLINK_CONTINUOUS_DIAGNOSTICS_V1) && !defined(WIN32)
+ 	memset(continuous_diag_counters, 0, sizeof(continuous_diag_counters));
+ 	continuous_diag_saturated = 0;
+@@ -5042,7 +5215,7 @@
+ 	continuous_diag_publication_dynamic_count = 0U;
+ 	continuous_diag_blob_rows_defined = 0;
+ #endif
+-	mlink_continuous_fields_clear(continuous_fields);
++	mlink_collected_fields_clear(continuous_fields);
+ #endif
+ 	session_ready = 0;
+ 	rxbuf_len = 0;
+@@ -5109,6 +5282,15 @@
+ 	 * Outlet-group commands are registered by microlink_register_outlet_commands(),
+ 	 * which is called both here (for a clean startup) and from upsdrv_updateinfo()
+ 	 * (for the post-fallback transition), so no driver restart is needed. */
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode && !microlink_ready) {
++		mlink_health_snapshot_t health=mlink_shared_operational_snapshot();
++		microlink_continuous_latch_end(microlink_guarded_stop_requested()
++			? MLINK_CONTINUOUS_END_CANCELLED : health.reason!=MLINK_HEALTH_NONE
++			? MLINK_CONTINUOUS_END_GUARD_ERROR : MLINK_CONTINUOUS_END_SESSION_LOST);
++		return;
++	}
++#endif
+ 	if (microlink_ready) {
+ 		microlink_publish_identity();
+ 		microlink_publish_status();
+@@ -5150,6 +5332,10 @@
+ 			"back on", device_path);
+ 	}
+ 
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	/* No command handlers or electrical controls are registered for v2. */
++	if (operational_mode) return;
++#endif
+ 	dstate_addcmd("test.battery.start");
+ 	dstate_addcmd("test.battery.stop");
+ 	dstate_addcmd("test.panel.start");
+@@ -5169,6 +5355,12 @@
+ {
+ 	int good = 0;
+ 	time_t now = microlink_now();
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode) {
++		microlink_operational_updateinfo();
++		return;
++	}
++#endif
+ 
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	if (continuous_mode) {
+@@ -5431,6 +5623,22 @@
+ {
+ 	char line[MLINK_CONTINUOUS_MAX_LINE + 1U];
+ 	uint32_t slot, sequence, missed;
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	mlink_continuous_field_t v1_fields[MLINK_CONTINUOUS_FIELD_COUNT];
++	/* A macro-enabled binary may still select v1. Its independent serializer
++	 * receives only checked v1 fields; v2 never enters this conversion. */
++	if (operational_mode) return 0;
++	for (size_t i=0;i<MLINK_CONTINUOUS_FIELD_COUNT;i++) {
++		if (continuous_fields[i].has_time && continuous_fields[i].observed_ms > 119999U)
++			return 0;
++		memcpy(v1_fields[i].value, continuous_fields[i].value, sizeof(v1_fields[i].value));
++		v1_fields[i].observed_ms = (uint32_t)continuous_fields[i].observed_ms;
++		v1_fields[i].kind = continuous_fields[i].kind;
++		v1_fields[i].state = continuous_fields[i].state;
++		v1_fields[i].has_value = continuous_fields[i].has_value;
++		v1_fields[i].has_time = continuous_fields[i].has_time;
++	}
++#endif
+ 	if (elapsed_ms >= 120000U) return 0;
+ 	slot = (uint32_t)(elapsed_ms / 5000U);
+ 	if (slot > 23U || (continuous_have_slot && slot <= continuous_last_slot)) return 0;
+@@ -5438,7 +5646,13 @@
+ 	if (sequence == 0U || sequence > 24U || slot + 1U < sequence) return 0;
+ 	missed = slot + 1U - sequence;
+ 	if (!mlink_continuous_sample_line(line, sizeof(line), sequence, slot,
+-		(uint32_t)elapsed_ms, missed, continuous_fields)) {
++		(uint32_t)elapsed_ms, missed,
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		v1_fields
++#else
++		continuous_fields
++#endif
++		)) {
+ 		upsdebugx(1, "apcmicrolink: continuous frame rejected by serializer at sequence=%u slot=%u elapsed_ms=%" PRIu64,
+ 			sequence, slot, elapsed_ms);
+ 		return 0;
+@@ -5450,7 +5664,7 @@
+ 		uint32_t minimum = UINT32_MAX, maximum = 0U;
+ 		unsigned int i, count = 0U;
+ 		for (i = 0U; i < MLINK_CONTINUOUS_FIELD_COUNT; i++) {
+-			const mlink_continuous_field_t *field = &continuous_fields[i];
++			const mlink_collected_field_t *field = &continuous_fields[i];
+ 			if (field->kind != MLINK_CONTINUOUS_STATIC
+ 			 && field->state == MLINK_CONTINUOUS_OBSERVED && field->has_time) {
+ 				if (field->observed_ms < minimum) minimum = field->observed_ms;
+@@ -5477,13 +5691,13 @@
+ 	return 1;
+ }
+ 
+-#if !MLINK_CONTINUOUS_PACING_V2
++#if !MLINK_CONTINUOUS_PACING_V2 || defined(MLINK_HIDAPI_OPERATIONAL_V2)
+ static int microlink_continuous_wait_until(uint64_t target_ms)
+ {
+ 	uint64_t elapsed_ms;
+ 	struct timeval wait_time;
+ 	uint64_t wait_ms;
+-	if (!microlink_usb_guard_elapsed_ms(&elapsed_ms)) return 0;
++	if (!microlink_collection_elapsed(&elapsed_ms)) return 0;
+ 	if (elapsed_ms >= target_ms) return 1;
+ 	wait_ms = target_ms - elapsed_ms;
+ 	if (wait_ms > 100U) wait_ms = 100U;
+@@ -5498,6 +5712,184 @@
+ 	if (select(0, NULL, NULL, NULL, &wait_time) < 0 && errno != EINTR) return 0;
+ #endif
+ 	return 1;
++}
++#endif
++
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++/* Driver orchestration does not own another health state machine: transport
++ * admission, lease and irreversible cleanup remain in the shared guard. */
++static int microlink_operational_live(uint64_t *elapsed_ms)
++{
++	if (continuous_terminal_latched) return 0;
++	if (microlink_guarded_stop_requested()) {
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_CANCELLED);
++		return 0;
++	}
++	if (!mlink_shared_operational_elapsed(elapsed_ms) || microlink_usb_guard_expired()) {
++		mlink_health_snapshot_t health=mlink_shared_operational_snapshot();
++		microlink_continuous_latch_end(health.reason==MLINK_HEALTH_STOP
++			? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	continuous_last_elapsed_ms=*elapsed_ms;
++	if (microlink_usb_device_gone()) {
++		microlink_continuous_latch_end(MLINK_CONTINUOUS_END_DEVICE_LOST);
++		return 0;
++	}
++	if (!session_ready || continuous_guard_error) {
++		microlink_continuous_latch_end(continuous_guard_error
++			? MLINK_CONTINUOUS_END_GUARD_ERROR : MLINK_CONTINUOUS_END_SESSION_LOST);
++		return 0;
++	}
++	return 1;
++}
++
++static void microlink_operational_updateinfo(void)
++{
++	uint64_t elapsed_ms;
++	if (!microlink_operational_live(&elapsed_ms)) return;
++	microlink_continuous_clear_dynamic_fields();
++	/* Same bounded full-page burst and NEXT/receive machinery as H07. A
++	 * timeout or ineligible cache is not a refresh; the native lease decides
++	 * expiry. There is no reconnect, fallback, INIT retry or 120-second cap. */
++	(void)microlink_poll_burst();
++	if (!microlink_operational_live(&elapsed_ms)) return;
++	microlink_check_auth_result(microlink_now());
++	microlink_publish_identity();
++	microlink_publish_status();
++	microlink_publish_runtime();
++}
++
++static int microlink_operational_emit_sample(uint64_t elapsed_ms)
++{
++	char line[MLINK_CONTINUOUS_MAX_LINE+1U];
++	uint64_t slot, sequence, missed;
++	mlink_operational_freshness_candidate_t candidate;
++	mlink_operational_freshness_result_t eligible;
++	if (elapsed_ms > MLINK_OPERATIONAL_MAX_SAFE_INTEGER
++	 || operational_sequence >= MLINK_OPERATIONAL_MAX_SAFE_INTEGER) goto failure;
++	slot=elapsed_ms/MLINK_OPERATIONAL_SLOT_MS;
++	/* Even an occupied slot is serialized/checked locally to accumulate the
++	 * nonshrinking observed-field union. It is never published twice. */
++	sequence=operational_have_slot && slot<=operational_last_slot
++		? operational_sequence : operational_sequence+1U;
++	if (sequence==0 || slot+1U<sequence) goto failure;
++	missed=slot+1U-sequence;
++	if (!mlink_operational_sample_line(line,sizeof(line),sequence,slot,
++		elapsed_ms,missed,continuous_fields)) goto failure;
++	eligible=mlink_operational_freshness_prepare(&operational_freshness,
++		continuous_fields,elapsed_ms,&candidate);
++	if (eligible==MLINK_FRESHNESS_ERROR) goto failure;
++	if (eligible==MLINK_FRESHNESS_INELIGIBLE
++	 || (operational_have_slot && slot<=operational_last_slot)) return 1;
++	if (!microlink_operational_live(&elapsed_ms)) return 0;
++	/* Eligibility is time-sensitive even if no field changed. Use this new
++	 * live observation immediately before output, not the earlier snapshot. */
++	if (!mlink_shared_operational_elapsed(&elapsed_ms)) {
++		microlink_continuous_latch_end(mlink_shared_operational_snapshot().reason==MLINK_HEALTH_STOP
++			? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	eligible=mlink_operational_freshness_prepare(&operational_freshness,
++		continuous_fields,elapsed_ms,&candidate);
++	if (eligible==MLINK_FRESHNESS_ERROR) goto failure;
++	if (eligible==MLINK_FRESHNESS_INELIGIBLE) return 1;
++	if (!microlink_continuous_write_line(line)) return 0;
++	/* Publication can block. Recheck the live lease after the complete flush
++	 * and before local renewal; raw bytes never reach either renewal API. */
++	if (!microlink_operational_live(&elapsed_ms)) return 0;
++	/* Flush may return inside the lease but after the status-age boundary.
++	 * Revoke the pre-flush candidate and revalidate with post-flush time.
++	 * Bytes are already emitted: any loss of eligibility ends this session,
++	 * without renewal/commit or a retry of its unaccounted emitted sequence. */
++	if (!mlink_shared_operational_elapsed(&elapsed_ms)) {
++		microlink_continuous_latch_end(mlink_shared_operational_snapshot().reason==MLINK_HEALTH_STOP
++			? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	eligible=mlink_operational_freshness_prepare(&operational_freshness,
++		continuous_fields,elapsed_ms,&candidate);
++	if (eligible!=MLINK_FRESHNESS_ELIGIBLE) goto failure;
++	if (!mlink_shared_operational_published(candidate.proposed_minimum_ms)) {
++		microlink_continuous_latch_end(mlink_shared_operational_snapshot().reason==MLINK_HEALTH_STOP
++			? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++		return 0;
++	}
++	if (!mlink_operational_freshness_commit(&operational_freshness,&candidate))
++		goto failure;
++	operational_sequence=sequence;
++	operational_last_slot=slot;
++	operational_have_slot=1;
++	return 1;
++failure:
++	microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++	return 0;
++}
++
++static void microlink_operational_cleanup(void)
++{
++	int stop_ok, clock_ok, released, complete;
++	uint64_t elapsed_ms;
++	mlink_health_snapshot_t health;
++	if (operational_cleanup_done) return;
++	operational_cleanup_done=1;
++	if (operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED)
++		mlink_shared_operational_stop();
++	else mlink_shared_operational_fail();
++	/* STOP is not applicable before successful shared session admission.
++	 * After admission its failed/late attempt must remain a cleanup failure. */
++	stop_ok=!operational_session_admitted || microlink_usb_cleanup_stop();
++	session_ready=0;
++	microlink_hidapi_finish();
++	released=hidapi_finish_status==MLINK_HIDAPI_SESSION_RELEASED;
++	complete=mlink_shared_operational_cleanup_complete();
++	/* The reviewed guard supplies its checked post-disposal clock here.
++	 * Never substitute a pre-cleanup time for the terminal record. */
++	clock_ok=mlink_shared_operational_elapsed(&elapsed_ms);
++	if (clock_ok) continuous_last_elapsed_ms=elapsed_ms;
++	continuous_cleanup_clock_ok=clock_ok;
++	operational_cleanup_ok=stop_ok && released && complete && clock_ok;
++	health=mlink_shared_operational_snapshot();
++	if (operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED
++	 && health.reason!=MLINK_HEALTH_STOP)
++		operational_end_reason=MLINK_OPERATIONAL_END_GUARD_ERROR;
++	if (!operational_cleanup_ok) operational_end_reason=MLINK_OPERATIONAL_END_GUARD_ERROR;
++}
++
++int apcmicrolink_operational_stream_v2_run(void)
++{
++	char line[MLINK_CONTINUOUS_MAX_LINE+1U];
++	uint64_t elapsed_ms=0, iteration_start;
++	int output_ok=1;
++	if (!operational_mode) return 1;
++	for (;;) {
++		if (!microlink_operational_live(&elapsed_ms)) break;
++		iteration_start=elapsed_ms;
++		if (!microlink_operational_emit_sample(elapsed_ms)) {
++			if (operational_end_reason==MLINK_OPERATIONAL_END_OUTPUT_ERROR) output_ok=0;
++			break;
++		}
++		upsdrv_updateinfo();
++		if (!microlink_operational_live(&elapsed_ms)) break;
++		/* Keep continuous NEXT turns, not five-second slot sleeps. A bounded
++		 * 10 ms floor only prevents a zero-duration host from busy-spinning. */
++		if (iteration_start > MLINK_OPERATIONAL_MAX_SAFE_INTEGER-10U) {
++			microlink_continuous_latch_end(MLINK_CONTINUOUS_END_GUARD_ERROR);
++			break;
++		}
++		if (!microlink_continuous_wait_until(iteration_start+10U)) {
++			microlink_continuous_latch_end(mlink_shared_operational_snapshot().reason==MLINK_HEALTH_STOP
++				? MLINK_CONTINUOUS_END_CANCELLED : MLINK_CONTINUOUS_END_GUARD_ERROR);
++			break;
++		}
++	}
++	microlink_operational_cleanup();
++	if (output_ok && continuous_cleanup_clock_ok
++	 && mlink_operational_end_line(line,sizeof(line),continuous_last_elapsed_ms,
++		operational_end_reason)) output_ok=microlink_continuous_write_line(line);
++	else output_ok=0;
++	return operational_cleanup_ok && output_ok
++		&& operational_end_reason==MLINK_OPERATIONAL_END_CANCELLED ? 0 : 1;
+ }
+ #endif
+ 
+@@ -5679,6 +6071,9 @@
+ #endif
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	addvar(VAR_FLAG, "monitor_stream_v1", "Opt in to the bounded continuous NDJSON candidate stream");
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	addvar(VAR_FLAG, "monitor_stream_v2", "Opt in to the operational schema-2 stream with publication health lease");
++#endif
+ #endif
+ #ifdef WITH_USB
+ 	microlink_usb_addvars();
+@@ -5709,6 +6104,12 @@
+ 
+ void upsdrv_cleanup(void)
+ {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (operational_mode) {
++		microlink_operational_cleanup();
++		return;
++	}
++#endif
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ 	int continuous_stop_ok = 1;
+ 	int continuous_stop_invoked = 0;
+--- a/drivers/main.c
++++ b/drivers/main.c
+@@ -25,6 +25,9 @@
+ #include "main.h"
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ extern int apcmicrolink_continuous_stream_v1_run(void);
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++extern int apcmicrolink_operational_stream_v2_run(void);
++#endif
+ #endif
+ #include "nut_stdint.h"
+ #include "nut_float.h"
+@@ -2219,6 +2222,11 @@
+ static void exit_if_guarded_dump_signal_requested(void)
+ {
+ 	if (guarded_dump_signal != 0) {
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++		/* The v2 driver owns STOP/finish/end emission even during startup.
++		 * Its shared guard observes this same signal before every host call. */
++		if (testvar("monitor_stream_v2")) return;
++#endif
+ 		exit(EXIT_FAILURE);
+ 	}
+ }
+@@ -2790,9 +2798,22 @@
+ #endif
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
+ # ifndef WIN32
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (testvar("monitor_stream_v1") && testvar("monitor_stream_v2"))
++		fatalx(EXIT_FAILURE, "stream v1 and v2 selectors are mutually exclusive");
++	if (!testvar("monitor_stream_v1") && !testvar("monitor_stream_v2"))
++		fatalx(EXIT_FAILURE, "continuous candidate requires exactly one stream selector");
++	if (testvar("monitor_stream_v2")
++	 && (dump_data != 1 || !continuous_exact_dump_option || foreground != 1
++		|| cmd != 0 || do_forceshutdown || oldpid_specified
++		|| !continuous_direct_cli || continuous_default_override_seen
++		|| testvar("ignorelb")))
++		fatalx(EXIT_FAILURE, "monitor_stream_v2 requires direct -s CLI mode, exact -d1, foreground, and no commands, overrides/defaults, or ignorelb");
++#else
+ 	if (!testvar("monitor_stream_v1")) {
+ 		fatalx(EXIT_FAILURE, "apcmicrolink-hidapi-continuous requires monitor_stream_v1");
+ 	}
++#endif
+ 	if (testvar("monitor_stream_v1")
+ 	 && (dump_data != 1 || !continuous_exact_dump_option || foreground != 1
+ 		|| cmd != 0 || do_forceshutdown || oldpid_specified
+@@ -3365,6 +3386,12 @@
+ 	exit_if_guarded_dump_signal_requested();
+ # endif	/* !WIN32 */
+ #ifdef MLINK_HIDAPI_CONTINUOUS_CANDIDATE
++#ifdef MLINK_HIDAPI_OPERATIONAL_V2
++	if (testvar("monitor_stream_v2")) {
++		int stream_status = apcmicrolink_operational_stream_v2_run();
++		exit(stream_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
++	}
++#endif
+ 	if (testvar("monitor_stream_v1")) {
+ 		int stream_status = apcmicrolink_continuous_stream_v1_run();
+ 		exit(stream_status == 0 ? EXIT_SUCCESS : EXIT_FAILURE);

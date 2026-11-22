@@ -6,6 +6,12 @@ The sixth incremental patch addresses the pending-transfer gaps found in the
 Microlink traffic, electrical continuity, real libusb teardown or process exit.
 The application, installed widget and native Apple reader are unchanged.
 
+This is the historical six-patch snapshot. The subsequent
+[startup/stop candidate](NUT_GUARDED_STARTUP_STOP_CANDIDATE.md) addresses
+additional guarded-startup and stop-request call-site gaps. Its evidence must
+not be inferred from the ownership fixture below. The separate process-runner
+change and its limits are described in [process supervision](PROCESS_DEADLINE.md).
+
 ## Reproducible Input
 
 Use a separate source checkout at NUT

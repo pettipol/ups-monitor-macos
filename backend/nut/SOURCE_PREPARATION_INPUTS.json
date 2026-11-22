@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "status": "DRAFT_NOT_RUN",
+  "baseline_runner_sha256": "101f5b5c9ec95d7feb18c53e531e4554589a3f0477884c55cc062a889f9c5006",
+  "baseline_manifest_sha256": "9020f7675b89f996d6c78dfd48ca63cc61a1f27349f97254dffd9cb6f21f189e",
+  "e32_manifest_sha256": "4e2d6b6ea7f191af4262a113f6a692eebbdaafbb35617f4eb2b91c20b23ba8d5",
+  "source_archive_sha256": "e3ea175565c461a9e741df77dd91103d695b9c60f8d423d9b6ce6c778f98615f",
+  "supervisor_sha256": "81cf0d70708042810f7f26f42e2306cb89e83d4e306063dc1a5648b2eb883d4e",
+  "source_post_e28_map_sha256": "da2e3a2b88b4cadaed5cc45acf7e94818448c192472c45cf8a468df6f5666520",
+  "source_count": 190,
+  "scope": "12 baseline patches, five production patches, two freshness modules, diagnostic patch; no replay hooks or build"
+}
