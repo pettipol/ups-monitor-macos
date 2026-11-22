@@ -39,6 +39,8 @@ distribution readiness.
 
 | Artifact reviewed | Contents and SHA-256 |
 |---|---|
+| **E122 first-IO macOS app** | App, widget, frozen Python helper and first-IO NUT/HIDAPI reader. `e48ae1588e1aea1509f863d997f78fa2a3fe07723ea41427d0ea57504200ee01` |
+| **E124 first-IO source companion** | Reader/runtime sources, recipe and notices; frontend remains separate. `b76213d3cc42bc9c7726500108d03e2f11f399f0cdd53c265bbade0a984e366d` |
 | **E96 real macOS app** | App, widget, frozen Python helper and NUT/HIDAPI reader. `8dbc984cce32fbb111a498e8353b94f445fe0470aee17aa4c06bd4ddaff878b3` |
 | **E109 real macOS app** | Local app and widget from E106, unchanged E107 helper and signed E105 reader copy. `2b783cf95d8f8d7804983d04b20fa9e6c7db3876e58ffbe48ac99ec12770356c` |
 | **E98 synthetic macOS app** | App, widget, the same frozen helper and a project fixture producer. `a434827080b11f8d54d99dadd37a38bebe013de9e78c88e3056d4df8ebe70332` |
